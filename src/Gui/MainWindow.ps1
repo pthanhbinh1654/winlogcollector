@@ -72,18 +72,20 @@ function Show-MainWindow {
     $form.AutoScaleMode = [System.Windows.Forms.AutoScaleMode]::Dpi
 
     # Styles
-    $fontHeader = New-Object System.Drawing.Font("Segoe UI", 15, [System.Drawing.FontStyle]::Bold)
-    $fontSub = New-Object System.Drawing.Font("Segoe UI", 9, [System.Drawing.FontStyle]::Regular)
+    $fontHeader  = New-Object System.Drawing.Font("Segoe UI", 15, [System.Drawing.FontStyle]::Bold)
+    $fontSub     = New-Object System.Drawing.Font("Segoe UI", 9,  [System.Drawing.FontStyle]::Regular)
     $fontSection = New-Object System.Drawing.Font("Segoe UI", 11, [System.Drawing.FontStyle]::Bold)
-    $fontBold = New-Object System.Drawing.Font("Segoe UI", 9.5, [System.Drawing.FontStyle]::Bold)
-    $fontConsole = New-Object System.Drawing.Font("Consolas", 9.5)
+    $fontBold    = New-Object System.Drawing.Font("Segoe UI", 10, [System.Drawing.FontStyle]::Bold)
+    $fontConsole = New-Object System.Drawing.Font("Consolas", 10)
 
-    $bgCard = [System.Drawing.Color]::FromArgb(40, 40, 45)
-    $bgInput = [System.Drawing.Color]::FromArgb(45, 45, 50)
-    $accentBlue = [System.Drawing.Color]::FromArgb(0, 122, 204)
+    $bgCard      = [System.Drawing.Color]::FromArgb(40, 40, 45)
+    $bgInput     = [System.Drawing.Color]::FromArgb(45, 45, 50)
+    $accentBlue  = [System.Drawing.Color]::FromArgb(0, 122, 204)
     $accentGreen = [System.Drawing.Color]::FromArgb(40, 167, 69)
-    $accentRed = [System.Drawing.Color]::FromArgb(220, 53, 69)
-    $accentOrange = [System.Drawing.Color]::FromArgb(255, 152, 0)
+    $accentRed   = [System.Drawing.Color]::FromArgb(220, 53, 69)
+    $accentOrange= [System.Drawing.Color]::FromArgb(255, 152, 0)
+    $accentGray  = [System.Drawing.Color]::FromArgb(70, 70, 85)
+    $accentDark  = [System.Drawing.Color]::FromArgb(70, 70, 90)
 
     # ---- Top Header Panel ----
     $pnlHeader = New-Object System.Windows.Forms.Panel
@@ -239,9 +241,10 @@ function Show-MainWindow {
         return @{ Box = $box; ValLabel = $lblVal; SubLabel = $lblSub }
     }
 
+    $accentCyan = [System.Drawing.Color]::Cyan
     $card1 = New-StatCard -Title "EVENT ĐÃ THU THẬP" -Value "0" -Subtext "Trong chu kỳ này" -Color $accentBlue
     $card2 = New-StatCard -Title "FILE TỒN TRONG QUEUE" -Value "0 File" -Subtext "Dung lượng: 0 MB" -Color $accentOrange
-    $card3 = New-StatCard -Title "SFTP SERVER" -Value "CHƯA THỬ" -Subtext "$($Config.Remote.Host):$($Config.Remote.Port)" -Color [System.Drawing.Color]::Cyan
+    $card3 = New-StatCard -Title "SFTP SERVER" -Value "CHƯA THỬ" -Subtext "$($Config.Remote.Host):$($Config.Remote.Port)" -Color $accentCyan
     $card4 = New-StatCard -Title "KÊNH THẤT BẠI" -Value "0 Channel" -Subtext "Trạng thái: Tốt" -Color $accentGreen
 
     $pnlDashStats.Controls.Add($card1.Box, 0, 0)
@@ -305,7 +308,7 @@ function Show-MainWindow {
     $btnDashStartAuto = New-ActionButton -Text "[⚡] Bắt Đầu Tự Động" -Color $accentGreen -Width 200
     $btnDashStopAuto = New-ActionButton -Text "[⏹] Dừng Tự Động" -Color $accentRed -Width 180
     $btnDashStopAuto.Enabled = $false
-    $btnDashPreflight = New-ActionButton -Text "[🔍] Kiểm Tra Preflight" -Color [System.Drawing.Color]::FromArgb(70, 70, 85) -Width 200
+    $btnDashPreflight = New-ActionButton -Text "[🔍] Kiểm Tra Preflight" -Color $accentGray -Width 200
 
     $pnlDashActions.Controls.Add($btnDashRunOnce)
     $pnlDashActions.Controls.Add($btnDashStartAuto)
@@ -516,7 +519,8 @@ function Show-MainWindow {
         $txt = New-Object System.Windows.Forms.TextBox
         $txt.Text = $Value
         $txt.Location = New-Object System.Drawing.Point(180, ($Top - 3))
-        $txt.Size = New-Object System.Drawing.Size(if ($IsFile) { 750 }else { 350 }, 25)
+        $txtWidth = if ($IsFile) { 750 } else { 350 }
+        $txt.Size = New-Object System.Drawing.Size($txtWidth, 25)
         $txt.BackColor = $bgInput
         $txt.ForeColor = [System.Drawing.Color]::White
         $Parent.Controls.Add($txt)
@@ -553,7 +557,7 @@ function Show-MainWindow {
     $tabSftp.Controls.Add($pnlSftpActions)
 
     $btnSftpTestTcp = New-ActionButton -Text "[🔌] Kiểm Tra TCP Port" -Color $accentBlue -Width 210
-    $btnSftpTestAuth = New-ActionButton -Text "[🔑] Thử Đăng Nhập SFTP" -Color [System.Drawing.Color]::FromArgb(70, 70, 90) -Width 220
+    $btnSftpTestAuth = New-ActionButton -Text "[🔑] Thử Đăng Nhập SFTP" -Color $accentDark -Width 220
     $btnSftpSave = New-ActionButton -Text "[💾] Lưu Cấu Hình SFTP" -Color $accentGreen -Width 220
 
     $pnlSftpActions.Controls.Add($btnSftpTestTcp)
@@ -643,8 +647,8 @@ function Show-MainWindow {
     $tabQueue.Controls.Add($pnlQueueActions)
 
     $btnQueueRetry = New-ActionButton -Text "[🔄] Retry Tất Cả Ngay" -Color $accentBlue -Width 220
-    $btnQueueRefresh = New-ActionButton -Text "[🔃] Làm Mới Danh Sách" -Color [System.Drawing.Color]::FromArgb(70, 70, 90) -Width 210
-    $btnQueueOpenDir = New-ActionButton -Text "[📁] Mở Thư Mục Queue" -Color [System.Drawing.Color]::FromArgb(70, 70, 90) -Width 220
+    $btnQueueRefresh = New-ActionButton -Text "[🔃] Làm Mới Danh Sách" -Color $accentDark -Width 210
+    $btnQueueOpenDir = New-ActionButton -Text "[📁] Mở Thư Mục Queue" -Color $accentDark -Width 220
 
     $pnlQueueActions.Controls.Add($btnQueueRetry)
     $pnlQueueActions.Controls.Add($btnQueueRefresh)

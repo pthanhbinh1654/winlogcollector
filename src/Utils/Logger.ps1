@@ -31,7 +31,7 @@ function AddLog {
     if ($global:LogFile) {
         try {
             $entry = "{""timestampUtc"":""$utcNow"",""level"":""$Type"",""message"":$(($Message | ConvertTo-Json -Compress))}"
-            Add-Content -Path $global:LogFile -Value $entry -Encoding UTF8
+            Add-Content -Path $global:LogFile -Value $entry -Encoding UTF8 -ErrorAction SilentlyContinue
         }
         catch {}
     }
