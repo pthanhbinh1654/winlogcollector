@@ -1,0 +1,63 @@
+name: PowerShell CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  static-analysis:
+    name: PSScriptAnalyzer
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install PSScriptAnalyzer
+        shell: powershell
+        run: Install-Module PSScriptAnalyzer -Force -Scope CurrentUser -Repository PSGallery
+
+      - name: Run static analysis
+        shell: powershell
+        run: |
+          $issues = Invoke-ScriptAnalyzer -Path . -Recurse -Severity @('Error','Warning') -ExcludeRule 'PSAvoidUsingWriteHost'
+          if ($issues) { $issues | Format-Table RuleName, Severity, ScriptName, Line, Message -AutoSize }
+          $errors = $issues | Where-Object { $_.Severity -eq 'Error' }
+          if ($errors) {
+            Write-Host "❌ $($errors.Count) error(s) found by PSScriptAnalyzer" -ForegroundColor Red
+            exit 1
+          }
+          Write-Host "✅ No PSScriptAnalyzer errors." -ForegroundColor Green
+
+  unit-tests:
+    name: Pester Unit Tests
+    runs-on: windows-latest
+    needs: static-analysis
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Pester
+        shell: powershell
+        run: Install-Module Pester -Force -Scope CurrentUser -Repository PSGallery -MinimumVersion 5.0.0
+
+      - name: Run unit tests
+        shell: powershell
+        run: |
+          if (Test-Path tests) {
+            $config = New-PesterConfiguration
+            $config.Run.Path = 'tests'
+            $config.Output.Verbosity = 'Detailed'
+            $config.TestResult.Enabled = $true
+            $config.TestResult.OutputPath = 'test-results.xml'
+            $result = Invoke-Pester -Configuration $config
+            if ($result.FailedCount -gt 0) { exit 1 }
+          } else {
+            Write-Host "No tests directory found." -ForegroundColor Yellow
+          }
+
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-results
+          path: test-results.xml

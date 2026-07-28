@@ -1,4 +1,5 @@
 {
+    "_comment": "Sao chep file nay thanh config.json va chinh sua theo moi truong thuc te",
     "Remote": {
         "Host": "192.168.1.2",
         "Port": 22,

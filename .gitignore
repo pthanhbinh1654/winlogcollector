@@ -1,8 +1,19 @@
-# Logs va files tam thoi
-HiddenLogs/
+# Logs va files thu thap
 *.zip
-*.json
-!config.json
+*.jsonl
+*.tmp
+*.ready
+
+# Cau hinh ca nhan (khong commit)
+config/config.local.json
+config.json
+
+# Thu muc runtime
+runtime/
+queue/
+logs/
+archive/Ready/
+archive/Queue/
 
 # SSH Keys - TUYET DOI KHONG COMMIT
 *.pem
@@ -12,8 +23,9 @@ HiddenLogs/
 *_id_ed25519
 .ssh/
 
-# PowerShell temp files
+# Temp files
 sftp_cmd_*.txt
+sftp_*.txt
 
 # Windows system files
 Thumbs.db
@@ -23,5 +35,3 @@ $RECYCLE.BIN/
 # IDE
 .vscode/
 .idea/
-*.suo
-*.user
