@@ -1,31 +1,43 @@
 # =====================================================
-# Main.ps1 - Diem khoi chay chinh v0.3.0
-# Fix #9: Silent mode exit codes, no UAC
-# Fix #22: Loai bo file cu (da push vao archive/)
+# Main.ps1 - Single Entry Point & Orchestrator v0.3.1
+# Fix P0.10: Named Mutex (Global\WinLogCollector)
+# Fix P0.3: Single unified cycle function (Invoke-WinLogCollectorCycle)
+# Fix P0.1: Pass Context hashtable to GUI
 # =====================================================
 param(
     [string]$ConfigPath = "$PSScriptRoot\config.json",
     [switch]$Silent
 )
 
-# ---- Kiem tra quyen Admin ----
+# ---- 1. Named Mutex (Prevent Concurrent Instances - P0.10) ----
+$createdNew = $false
+$mutex = [System.Threading.Mutex]::new($true, "Global\WinLogCollector", [ref]$createdNew)
+if (-not $createdNew) {
+    Write-Host "⚠ Single instance enforced. Another instance of WinLogCollector is already running." -ForegroundColor Yellow
+    exit 12   # Exit code 12 = Already Running
+}
+
+# ---- 2. Admin Check ----
 $ScriptPath = $MyInvocation.MyCommand.Path
 $IsAdmin = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole(
     [Security.Principal.WindowsBuiltinRole]::Administrator
 )
-if (-Not $IsAdmin) {
+if (-not $IsAdmin) {
     if ($Silent) {
         Write-Error 'Administrator privilege is required. Run this script as Administrator.'
-        exit 11
+        $mutex.ReleaseMutex() | Out-Null
+        exit 11   # Exit code 11 = Insufficient privileges
     }
     $argStr = "-NoProfile -ExecutionPolicy RemoteSigned -File `"$ScriptPath`""
     Start-Process powershell -Verb RunAs -ArgumentList $argStr
+    $mutex.ReleaseMutex() | Out-Null
     exit
 }
 
-# ---- Doc cau hinh tu config.json (exit 10 neu sai) ----
+# ---- 3. Load & Validate Config ----
 if (-not (Test-Path $ConfigPath)) {
     Write-Error "Khong tim thay file cau hinh: $ConfigPath"
+    $mutex.ReleaseMutex() | Out-Null
     exit 10
 }
 try {
@@ -33,10 +45,11 @@ try {
 }
 catch {
     Write-Error "Config JSON khong hop le: $_"
+    $mutex.ReleaseMutex() | Out-Null
     exit 10
 }
 
-# Chuyen doi sang hashtable
+# Convert Config to Hashtable Context
 $ConfigHT = @{
     Remote     = @{
         Host           = $Config.Remote.Host
@@ -55,22 +68,23 @@ $ConfigHT = @{
         DefaultDurationMinutes = [int]$Config.Collection.DefaultDurationMinutes
     }
     Queue      = @{
-        MaxSizeMB   = if ($Config.Queue.MaxSizeMB) { [int]$Config.Queue.MaxSizeMB }  else { 2048 }
-        MaxAttempts = if ($Config.Queue.MaxAttempts) { [int]$Config.Queue.MaxAttempts } else { 20 }
+        MaxSizeMB   = if ($Config.Queue.MaxSizeMB) { [int]$Config.Queue.MaxSizeMB }   else { 2048 }
+        MaxAttempts = if ($Config.Queue.MaxAttempts) { [int]$Config.Queue.MaxAttempts }  else { 20 }
+        MaxAgeDays  = if ($Config.Queue.MaxAgeDays) { [int]$Config.Queue.MaxAgeDays }   else { 14 }
     }
 }
 
-# ---- Dot-source cac module ----
+# ---- 4. Dot-source Core Modules ----
 $SrcBase = Join-Path $PSScriptRoot "src"
 . (Join-Path $SrcBase "Utils\Logger.ps1")
 . (Join-Path $SrcBase "Utils\Security.ps1")
 . (Join-Path $SrcBase "Core\LogCollector.ps1")
 . (Join-Path $SrcBase "Core\LogUploader.ps1")
 
-# Khoi tao logger
+# Initialize Logger
 Initialize-Logger -DataDir $ConfigHT.Local.DataDir
 
-# ---- Tao thu muc can thiet ----
+# Directories
 $DataDir = $ConfigHT.Local.DataDir
 $ReadyDir = Join-Path $DataDir "Ready"
 $QueueDir = Join-Path $DataDir "Queue"
@@ -80,88 +94,127 @@ $StateFile = Join-Path $DataDir "state.json"
     if (-not (Test-Path $_)) { New-Item $_ -ItemType Directory -Force | Out-Null }
 }
 
-# ---- Silent Mode ----
-if ($Silent) {
-    AddLog "=== WinLogCollector Silent Mode ===" "INFO"
+$Context = @{
+    Config        = $ConfigHT
+    DataDir       = $DataDir
+    ReadyDir      = $ReadyDir
+    QueueDir      = $QueueDir
+    QuarantineDir = $QuarantineDir
+    StateFile     = $StateFile
+}
+
+# ---- 5. Single Unified Orchestration Function (P0.3) ----
+function Invoke-WinLogCollectorCycle {
+    param(
+        [Parameter(Mandatory)][hashtable]$Context,
+        [string]$Mode = "continuous"
+    )
+
+    $cfg = $Context.Config
     $exitCode = 0
 
-    # 1. Retry queue truoc
-    AddLog "Retry cac file trong queue..." "INFO"
-    $retryResult = Retry-WinLogQueue `
-        -QueueDir $QueueDir -QuarantineDir $QuarantineDir `
-        -RemoteHost $ConfigHT.Remote.Host -User $ConfigHT.Remote.User `
-        -RemoteBasePath $ConfigHT.Remote.RemotePath -SSHKeyPath $ConfigHT.Remote.SSHKeyPath `
-        -KnownHostsPath $ConfigHT.Remote.KnownHostsPath -Port $ConfigHT.Remote.Port `
-        -MaxSizeMB $ConfigHT.Queue.MaxSizeMB -MaxAttempts $ConfigHT.Queue.MaxAttempts
+    AddLog "=== Bat dau chu ky LogCollector ===" "INFO"
 
-    # 2. Thu thap ky nay
-    $StartTime = (Get-Date).ToUniversalTime().AddMinutes(-$ConfigHT.Collection.DefaultIntervalMinutes)
-    $EndTime = (Get-Date).ToUniversalTime()
-    AddLog "Thu thap tu $($StartTime.ToString('HH:mm:ss')) den $($EndTime.ToString('HH:mm:ss')) UTC" "INFO"
+    # Step A: Drain Queue first
+    AddLog "1/4. Retry cac file trong Queue..." "INFO"
+    $retry1 = Retry-WinLogQueue `
+        -QueueDir $Context.QueueDir -QuarantineDir $Context.QuarantineDir `
+        -RemoteHost $cfg.Remote.Host -User $cfg.Remote.User `
+        -RemoteBasePath $cfg.Remote.RemotePath -SSHKeyPath $cfg.Remote.SSHKeyPath `
+        -KnownHostsPath $cfg.Remote.KnownHostsPath -Port $cfg.Remote.Port `
+        -Mode $Mode -MaxSizeMB $cfg.Queue.MaxSizeMB -MaxAttempts $cfg.Queue.MaxAttempts
 
+    # Step B: Collect Events
+    AddLog "2/4. Thu thap cac Event Log moi..." "INFO"
+    $collectResult = $null
     try {
-        $readyFiles = Invoke-WinLogCollection `
-            -Subscriptions $ConfigHT.Collection.Subscriptions `
-            -OutputDir $ReadyDir -StateFile $StateFile `
-            -StartTime $StartTime -EndTime $EndTime
+        $collectResult = Invoke-WinLogCollection `
+            -Subscriptions $cfg.Collection.Subscriptions `
+            -OutputDir $Context.ReadyDir -StateFile $Context.StateFile `
+            -FallbackStartTime (Get-Date).ToUniversalTime().AddMinutes(-$cfg.Collection.DefaultIntervalMinutes)
     }
     catch {
-        AddLog "Loi thu thap: $_" "ERROR"
-        exit 20
+        AddLog "Loi ngoai le khi thu thap log: $_" "ERROR"
+        return [pscustomobject]@{ Success = $false; ExitCode = 20; Collected = 0; Queued = 0 }
     }
 
-    if (-not $readyFiles -or $readyFiles.Count -eq 0) {
-        AddLog "Khong co event moi. Ket thuc." "INFO"
-        exit 0
+    if (-not $collectResult.Success) {
+        AddLog "Co channel thu thap thất bại: $($collectResult.FailedChannels -join ', ')" "WARNING"
+        $exitCode = 20
     }
 
-    # 3. Archive va upload tung file
-    foreach ($readyFile in $readyFiles) {
-        $archiveResult = $null
-        try {
-            $archiveResult = New-WinLogArchive -JsonlPath $readyFile -DestDir $ReadyDir `
-                -HostId $env:COMPUTERNAME -StartUtc $StartTime -EndUtc $EndTime
-        }
-        catch {
-            AddLog "Loi tao archive: $_" "ERROR"
-            $exitCode = [math]::Max($exitCode, 30)
-            continue
-        }
-        Remove-Item $readyFile -ErrorAction SilentlyContinue
+    # Step C: Process & Upload Ready files (JSONL -> ZIP -> SFTP)
+    $readyFiles = $collectResult.ReadyFiles
+    if ($readyFiles -and $readyFiles.Count -gt 0) {
+        AddLog "3/4. Xuly va upload $($readyFiles.Count) file ready..." "INFO"
+        foreach ($readyFile in $readyFiles) {
+            if (-not (Test-Path $readyFile)) { continue }
+            $archive = $null
+            try {
+                $archive = New-WinLogArchive -JsonlPath $readyFile -DestDir $Context.ReadyDir -HostId $env:COMPUTERNAME
+                Remove-Item $readyFile -ErrorAction SilentlyContinue
+            }
+            catch {
+                AddLog "Loi nen archive cho $readyFile : $_" "ERROR"
+                $exitCode = [math]::Max($exitCode, 30)
+                continue
+            }
 
-        $uploadResult = Send-WinLogArchive `
-            -ArchivePath $archiveResult.ZipPath `
-            -RemoteHost $ConfigHT.Remote.Host -User $ConfigHT.Remote.User `
-            -RemoteBasePath $ConfigHT.Remote.RemotePath -SSHKeyPath $ConfigHT.Remote.SSHKeyPath `
-            -KnownHostsPath $ConfigHT.Remote.KnownHostsPath -Port $ConfigHT.Remote.Port
+            $upload = Send-WinLogArchive `
+                -ArchivePath $archive.ZipPath `
+                -RemoteHost $cfg.Remote.Host -User $cfg.Remote.User `
+                -RemoteBasePath $cfg.Remote.RemotePath -SSHKeyPath $cfg.Remote.SSHKeyPath `
+                -KnownHostsPath $cfg.Remote.KnownHostsPath -Port $cfg.Remote.Port -Mode $Mode
 
-        if ($uploadResult.Success) {
-            Remove-Item $archiveResult.ZipPath -ErrorAction SilentlyContinue
-            AddLog "Upload thanh cong: $(Split-Path $archiveResult.ZipPath -Leaf)" "SUCCESS"
-        }
-        else {
-            Move-WinLogArchiveToQueue -ArchivePath $archiveResult.ZipPath -QueueDir $QueueDir -LastError $uploadResult.Error
-            AddLog "Upload that bai, da luu vao queue." "WARNING"
-            $exitCode = [math]::Max($exitCode, 40)
+            if ($upload.Success) {
+                Remove-Item $archive.ZipPath -ErrorAction SilentlyContinue
+                AddLog "Upload thanh cong: $(Split-Path $archive.ZipPath -Leaf)" "SUCCESS"
+            }
+            else {
+                Move-WinLogArchiveToQueue -ArchivePath $archive.ZipPath -QueueDir $Context.QueueDir -LastError $upload.Error
+                AddLog "Upload that bai, da luu vao Queue." "WARNING"
+                $exitCode = [math]::Max($exitCode, 40)
+            }
         }
     }
+    else {
+        AddLog "3/4. Khong co file ready moi." "INFO"
+    }
 
-    # 4. Retry lai lan 2 voi cac file vua them vao queue
-    $retryResult2 = Retry-WinLogQueue `
-        -QueueDir $QueueDir -QuarantineDir $QuarantineDir `
-        -RemoteHost $ConfigHT.Remote.Host -User $ConfigHT.Remote.User `
-        -RemoteBasePath $ConfigHT.Remote.RemotePath -SSHKeyPath $ConfigHT.Remote.SSHKeyPath `
-        -KnownHostsPath $ConfigHT.Remote.KnownHostsPath -Port $ConfigHT.Remote.Port `
-        -MaxSizeMB $ConfigHT.Queue.MaxSizeMB -MaxAttempts $ConfigHT.Queue.MaxAttempts
+    # Step D: Final Queue Retry (catch anything queued in Step C)
+    AddLog "4/4. Drain Queue lan cuoi..." "INFO"
+    $retry2 = Retry-WinLogQueue `
+        -QueueDir $Context.QueueDir -QuarantineDir $Context.QuarantineDir `
+        -RemoteHost $cfg.Remote.Host -User $cfg.Remote.User `
+        -RemoteBasePath $cfg.Remote.RemotePath -SSHKeyPath $cfg.Remote.SSHKeyPath `
+        -KnownHostsPath $cfg.Remote.KnownHostsPath -Port $cfg.Remote.Port `
+        -Mode $Mode -MaxSizeMB $cfg.Queue.MaxSizeMB -MaxAttempts $cfg.Queue.MaxAttempts
 
-    AddLog "Ket thuc. Exit code: $exitCode" "INFO"
-    exit $exitCode
+    AddLog "=== Hoan thanh chu ky. ExitCode: $exitCode ===" "INFO"
 
+    return [pscustomobject]@{
+        Success    = ($exitCode -eq 0)
+        ExitCode   = $exitCode
+        Collected  = $collectResult.RecordCount
+        ReadyFiles = $readyFiles.Count
+    }
 }
-else {
-    # ---- GUI Mode ----
-    Add-Type -AssemblyName System.Windows.Forms
-    Add-Type -AssemblyName System.Drawing
-    . (Join-Path $SrcBase "Gui\MainWindow.ps1")
-    Show-MainWindow -Config $ConfigHT -ReadyDir $ReadyDir -QueueDir $QueueDir -QuarantineDir $QuarantineDir -StateFile $StateFile
+
+# ---- 6. Entry Point Execution ----
+try {
+    if ($Silent) {
+        $result = Invoke-WinLogCollectorCycle -Context $Context -Mode "continuous"
+        $mutex.ReleaseMutex() | Out-Null
+        exit $result.ExitCode
+    }
+    else {
+        Add-Type -AssemblyName System.Windows.Forms
+        Add-Type -AssemblyName System.Drawing
+        . (Join-Path $SrcBase "Gui\MainWindow.ps1")
+        # Pass Context hashtable to GUI (Fix P0.1)
+        Show-MainWindow -Context $Context
+    }
+}
+finally {
+    try { $mutex.ReleaseMutex() } catch {}
 }

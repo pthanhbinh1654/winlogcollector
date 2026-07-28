@@ -1,318 +1,240 @@
 # =====================================================
-# MainWindow.ps1 - GUI: Windows Forms Interface
+# MainWindow.ps1 - GUI WinForms Interface v0.3.1
+# Fix P0.1: Signature matches Show-MainWindow -Context $Context
+# Fix P0.2: Uses new config schema (DataDir, Subscriptions)
+# Fix P0.3: Calls Invoke-WinLogCollectorCycle instead of legacy functions
+# Fix P0.4: Checks .ready and .zip files instead of .json
+# Fix P0.5: Registers Logger scriptblock sink
 # =====================================================
 
 function Show-MainWindow {
-    param([hashtable]$Config)
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][hashtable]$Context
+    )
 
-    Add-Type -AssemblyName System.Windows.Forms
-    Add-Type -AssemblyName System.Drawing
-    [System.Windows.Forms.Application]::EnableVisualStyles()
+    $Config = $Context.Config
 
-    # --- Form chinh ---
+    # ---- Register Logger Sink ----
+    $script:LogBox = $null
+    Initialize-Logger -DataDir $Context.DataDir -Sink {
+        param($Message, $Type)
+        if ($script:LogBox -and -not $script:LogBox.IsDisposed) {
+            $color = switch ($Type) {
+                "ERROR" { [System.Drawing.Color]::FromArgb(255, 80, 80) }
+                "WARNING" { [System.Drawing.Color]::DarkOrange }
+                "SUCCESS" { [System.Drawing.Color]::FromArgb(0, 200, 100) }
+                default { [System.Drawing.Color]::White }
+            }
+            $entry = "[$(Get-Date -Format 'HH:mm:ss')] [$Type] $Message`r`n"
+            if ($script:LogBox.InvokeRequired) {
+                $script:LogBox.Invoke([Action] {
+                        $script:LogBox.SelectionStart = $script:LogBox.TextLength
+                        $script:LogBox.SelectionLength = 0
+                        $script:LogBox.SelectionColor = $color
+                        $script:LogBox.AppendText($entry)
+                        $script:LogBox.ScrollToCaret()
+                    })
+            }
+            else {
+                $script:LogBox.SelectionStart = $script:LogBox.TextLength
+                $script:LogBox.SelectionLength = 0
+                $script:LogBox.SelectionColor = $color
+                $script:LogBox.AppendText($entry)
+                $script:LogBox.ScrollToCaret()
+            }
+        }
+    }
+
+    # ---- Form Design ----
     $form = New-Object System.Windows.Forms.Form
-    $form.Text = 'WinLogCollector – He thong Thu thap Log'
-    $form.Size = New-Object System.Drawing.Size(860, 920)
-    $form.StartPosition = 'CenterScreen'
-    $form.BackColor = [System.Drawing.Color]::FromArgb(245, 245, 245)
-    $form.Font = New-Object System.Drawing.Font("Segoe UI", 9)
-    $form.FormBorderStyle = 'FixedSingle'
+    $form.Text = "Windows Log Collector Agent v0.3.1"
+    $form.Size = New-Object System.Drawing.Size(950, 700)
+    $form.StartPosition = "CenterScreen"
+    $form.BackColor = [System.Drawing.Color]::FromArgb(30, 30, 30)
+    $form.ForeColor = [System.Drawing.Color]::White
+    $form.FormBorderStyle = "FixedSingle"
     $form.MaximizeBox = $false
 
-    # --- Header ---
-    $header = New-Object System.Windows.Forms.Panel
-    $header.Dock = 'Top'
-    $header.Height = 70
-    $header.BackColor = [System.Drawing.Color]::FromArgb(0, 120, 215)
-    $form.Controls.Add($header)
+    $fontHeader = New-Object System.Drawing.Font("Segoe UI", 14, [System.Drawing.FontStyle]::Bold)
+    $fontLabel = New-Object System.Drawing.Font("Segoe UI", 10, [System.Drawing.FontStyle]::Regular)
+    $fontBtn = New-Object System.Drawing.Font("Segoe UI", 10, [System.Drawing.FontStyle]::Bold)
+    $fontLog = New-Object System.Drawing.Font("Consolas", 9, [System.Drawing.FontStyle]::Regular)
 
+    # Title
     $lblTitle = New-Object System.Windows.Forms.Label
-    $lblTitle.Text = 'WinLogCollector – Thu thap & Gui Log Windows'
-    $lblTitle.ForeColor = [System.Drawing.Color]::White
-    $lblTitle.Font = New-Object System.Drawing.Font("Segoe UI", 14, [System.Drawing.FontStyle]::Bold)
-    $lblTitle.Location = New-Object System.Drawing.Point(15, 10)
+    $lblTitle.Text = "WINDOWS LOG COLLECTOR AGENT"
+    $lblTitle.Font = $fontHeader
+    $lblTitle.ForeColor = [System.Drawing.Color]::FromArgb(0, 150, 255)
+    $lblTitle.Location = New-Object System.Drawing.Point(20, 15)
     $lblTitle.AutoSize = $true
-    $header.Controls.Add($lblTitle)
+    $form.Controls.Add($lblTitle)
 
-    $lblSub = New-Object System.Windows.Forms.Label
-    $lblSub.Text = "v2.0 – Modular Edition | github.com/B2203708"
-    $lblSub.ForeColor = [System.Drawing.Color]::FromArgb(200, 230, 255)
-    $lblSub.Font = New-Object System.Drawing.Font("Segoe UI", 8)
-    $lblSub.Location = New-Object System.Drawing.Point(17, 45)
-    $lblSub.AutoSize = $true
-    $header.Controls.Add($lblSub)
+    # ---- Panel Config ----
+    $grpConfig = New-Object System.Windows.Forms.GroupBox
+    $grpConfig.Text = " Thong tin Cấu hình "
+    $grpConfig.Font = $fontLabel
+    $grpConfig.ForeColor = [System.Drawing.Color]::LightGray
+    $grpConfig.Location = New-Object System.Drawing.Point(20, 50)
+    $grpConfig.Size = New-Object System.Drawing.Size(895, 140)
+    $form.Controls.Add($grpConfig)
 
-    # --- Main panel + FlowLayout ---
-    $main = New-Object System.Windows.Forms.Panel
-    $main.Location = New-Object System.Drawing.Point(0, 70)
-    $main.Size = New-Object System.Drawing.Size(860, 850)
-    $main.Padding = New-Object System.Windows.Forms.Padding(15)
-    $main.AutoScroll = $true
-    $form.Controls.Add($main)
+    # Remote Server
+    $lblServer = New-Object System.Windows.Forms.Label
+    $lblServer.Text = "SFTP Server: $($Config.Remote.User)@$($Config.Remote.Host):$($Config.Remote.Port)"
+    $lblServer.Location = New-Object System.Drawing.Point(20, 30)
+    $lblServer.AutoSize = $true
+    $grpConfig.Controls.Add($lblServer)
 
-    $flow = New-Object System.Windows.Forms.FlowLayoutPanel
-    $flow.Dock = 'Fill'
-    $flow.FlowDirection = 'TopDown'
-    $flow.WrapContents = $false
-    $flow.AutoScroll = $false
-    $main.Controls.Add($flow)
+    # Channels (Fix P0.2: get from Subscriptions)
+    $channelsStr = ($Config.Collection.Subscriptions | ForEach-Object { $_.Channel }) -join ", "
+    $lblChannels = New-Object System.Windows.Forms.Label
+    $lblChannels.Text = "Channels: $channelsStr"
+    $lblChannels.Location = New-Object System.Drawing.Point(20, 60)
+    $lblChannels.AutoSize = $true
+    $grpConfig.Controls.Add($lblChannels)
 
-    # ---- Helper: tao GroupBox nhanh ----
-    function New-Group { param($text, $h) $g = New-Object System.Windows.Forms.GroupBox; $g.Text = $text; $g.Size = New-Object System.Drawing.Size(810, $h); $g.Font = New-Object System.Drawing.Font("Segoe UI", 9, [System.Drawing.FontStyle]::Bold); $g }
-    function New-Lbl { param($t, $x, $y, $w = 120) $l = New-Object System.Windows.Forms.Label; $l.Text = $t; $l.Location = New-Object System.Drawing.Point($x, $y); $l.Size = New-Object System.Drawing.Size($w, 20); $l.Font = New-Object System.Drawing.Font("Segoe UI", 9); $l }
-    function New-Txt { param($t, $x, $y, $w = 150) $tb = New-Object System.Windows.Forms.TextBox; $tb.Text = $t; $tb.Location = New-Object System.Drawing.Point($x, $y); $tb.Size = New-Object System.Drawing.Size($w, 22); $tb.Font = New-Object System.Drawing.Font("Segoe UI", 9); $tb }
+    # Directories
+    $lblDirs = New-Object System.Windows.Forms.Label
+    $lblDirs.Text = "DataDir: $($Context.DataDir)  |  RemotePath: $($Config.Remote.RemotePath)"
+    $lblDirs.Location = New-Object System.Drawing.Point(20, 95)
+    $lblDirs.AutoSize = $true
+    $grpConfig.Controls.Add($lblDirs)
 
-    # ==================== GROUP 1: Thu thap ====================
-    $group1 = New-Group "Thu thap Log" 105
-    $flow.Controls.Add($group1)
+    # ---- Panel Actions ----
+    $btnPreflight = New-Object System.Windows.Forms.Button
+    $btnPreflight.Text = "🔍 Preflight Check"
+    $btnPreflight.Font = $fontBtn
+    $btnPreflight.BackColor = [System.Drawing.Color]::FromArgb(60, 60, 60)
+    $btnPreflight.ForeColor = [System.Drawing.Color]::White
+    $btnPreflight.FlatStyle = "Flat"
+    $btnPreflight.Location = New-Object System.Drawing.Point(20, 205)
+    $btnPreflight.Size = New-Object System.Drawing.Size(160, 40)
+    $form.Controls.Add($btnPreflight)
 
-    $group1.Controls.Add((New-Lbl "Che do:" 15 28 80))
-    $cboMode = New-Object System.Windows.Forms.ComboBox
-    $cboMode.Location = New-Object System.Drawing.Point(100, 25); $cboMode.Size = New-Object System.Drawing.Size(140, 22)
-    $cboMode.DropDownStyle = 'DropDownList'; $cboMode.Items.AddRange(@('Limited', 'Continuous')); $cboMode.SelectedIndex = 0
-    $cboMode.Font = New-Object System.Drawing.Font("Segoe UI", 9); $group1.Controls.Add($cboMode)
+    $btnRunOnce = New-Object System.Windows.Forms.Button
+    $btnRunOnce.Text = "▶ Thu thap Ngay"
+    $btnRunOnce.Font = $fontBtn
+    $btnRunOnce.BackColor = [System.Drawing.Color]::FromArgb(0, 120, 215)
+    $btnRunOnce.ForeColor = [System.Drawing.Color]::White
+    $btnRunOnce.FlatStyle = "Flat"
+    $btnRunOnce.Location = New-Object System.Drawing.Point(195, 205)
+    $btnRunOnce.Size = New-Object System.Drawing.Size(160, 40)
+    $form.Controls.Add($btnRunOnce)
 
-    $group1.Controls.Add((New-Lbl "Loai Log:" 370 28 70))
-    $cboLogType = New-Object System.Windows.Forms.ComboBox
-    $cboLogType.Location = New-Object System.Drawing.Point(445, 25); $cboLogType.Size = New-Object System.Drawing.Size(160, 22)
-    $cboLogType.DropDownStyle = 'DropDownList'; $cboLogType.Items.AddRange(@('Application', 'Security', 'System', 'Setup')); $cboLogType.SelectedIndex = 0
-    $cboLogType.Font = New-Object System.Drawing.Font("Segoe UI", 9); $group1.Controls.Add($cboLogType)
+    $btnStartAuto = New-Object System.Windows.Forms.Button
+    $btnStartAuto.Text = "⚡ Tu dong (Timer)"
+    $btnStartAuto.Font = $fontBtn
+    $btnStartAuto.BackColor = [System.Drawing.Color]::FromArgb(0, 150, 80)
+    $btnStartAuto.ForeColor = [System.Drawing.Color]::White
+    $btnStartAuto.FlatStyle = "Flat"
+    $btnStartAuto.Location = New-Object System.Drawing.Point(370, 205)
+    $btnStartAuto.Size = New-Object System.Drawing.Size(160, 40)
+    $form.Controls.Add($btnStartAuto)
 
-    $group1.Controls.Add((New-Lbl "Thu muc luu:" 15 60 100))
-    $txtFolder = New-Txt $Config.Local.FolderLuuLog 120 58 570
-    $group1.Controls.Add($txtFolder)
-    $btnBrowse = New-Object System.Windows.Forms.Button; $btnBrowse.Text = '...'; $btnBrowse.Location = New-Object System.Drawing.Point(698, 57); $btnBrowse.Size = New-Object System.Drawing.Size(45, 24)
-    $btnBrowse.Add_Click({ $fd = New-Object System.Windows.Forms.FolderBrowserDialog; $fd.SelectedPath = $txtFolder.Text; if ($fd.ShowDialog() -eq 'OK') { $txtFolder.Text = $fd.SelectedPath } })
-    $group1.Controls.Add($btnBrowse)
+    $btnStopAuto = New-Object System.Windows.Forms.Button
+    $btnStopAuto.Text = "⏹ Dung Tu dong"
+    $btnStopAuto.Font = $fontBtn
+    $btnStopAuto.BackColor = [System.Drawing.Color]::FromArgb(180, 40, 40)
+    $btnStopAuto.ForeColor = [System.Drawing.Color]::White
+    $btnStopAuto.FlatStyle = "Flat"
+    $btnStopAuto.Enabled = $false
+    $btnStopAuto.Location = New-Object System.Drawing.Point(545, 205)
+    $btnStopAuto.Size = New-Object System.Drawing.Size(160, 40)
+    $form.Controls.Add($btnStopAuto)
 
-    # ==================== GROUP 2: Limited ====================
-    $group2 = New-Group "Cau hinh thu thap 1 khoang thoi gian (Limited)" 105
-    $flow.Controls.Add($group2)
+    # Status Label
+    $lblStatus = New-Object System.Windows.Forms.Label
+    $lblStatus.Text = "Trang thai: San sang"
+    $lblStatus.Font = $fontLabel
+    $lblStatus.ForeColor = [System.Drawing.Color]::LimeGreen
+    $lblStatus.Location = New-Object System.Drawing.Point(720, 215)
+    $lblStatus.AutoSize = $true
+    $form.Controls.Add($lblStatus)
 
-    $group2.Controls.Add((New-Lbl "Tu ngay:" 15 28 80))
-    $dtpStart = New-Object System.Windows.Forms.DateTimePicker; $dtpStart.Location = New-Object System.Drawing.Point(100, 25); $dtpStart.Size = New-Object System.Drawing.Size(180, 22)
-    $dtpStart.Format = [System.Windows.Forms.DateTimePickerFormat]::Custom; $dtpStart.CustomFormat = "dd/MM/yyyy HH:mm:ss"; $dtpStart.Value = (Get-Date).AddDays(-1); $group2.Controls.Add($dtpStart)
+    # ---- RichTextBox Log Output ----
+    $script:LogBox = New-Object System.Windows.Forms.RichTextBox
+    $script:LogBox.Font = $fontLog
+    $script:LogBox.BackColor = [System.Drawing.Color]::FromArgb(15, 15, 15)
+    $script:LogBox.ForeColor = [System.Drawing.Color]::White
+    $script:LogBox.Location = New-Object System.Drawing.Point(20, 260)
+    $script:LogBox.Size = New-Object System.Drawing.Size(895, 380)
+    $script:LogBox.ReadOnly = $true
+    $form.Controls.Add($script:LogBox)
 
-    $group2.Controls.Add((New-Lbl "Den ngay:" 320 28 80))
-    $dtpEnd = New-Object System.Windows.Forms.DateTimePicker; $dtpEnd.Location = New-Object System.Drawing.Point(405, 25); $dtpEnd.Size = New-Object System.Drawing.Size(180, 22)
-    $dtpEnd.Format = [System.Windows.Forms.DateTimePickerFormat]::Custom; $dtpEnd.CustomFormat = "dd/MM/yyyy HH:mm:ss"; $dtpEnd.Value = (Get-Date); $group2.Controls.Add($dtpEnd)
+    # ---- Timer for Continuous Collection ----
+    $timer = New-Object System.Windows.Forms.Timer
+    $intervalMs = [math]::Max(10000, $Config.Collection.DefaultIntervalMinutes * 60 * 1000)
+    $timer.Interval = $intervalMs
 
-    $lblNote2 = New-Lbl "⚠ Thoi gian bat dau phai nho hon thoi gian ket thuc" 15 62 500
-    $lblNote2.Font = New-Object System.Drawing.Font("Segoe UI", 9, [System.Drawing.FontStyle]::Italic); $lblNote2.ForeColor = [System.Drawing.Color]::DarkBlue; $group2.Controls.Add($lblNote2)
+    # ---- Event Handlers ----
 
-    # ==================== GROUP 3: Continuous ====================
-    $group3 = New-Group "Cau hinh thu thap lien tuc (Continuous)" 105
-    $flow.Controls.Add($group3)
-
-    $group3.Controls.Add((New-Lbl "Tong thoi gian (phut):" 15 28 145))
-    $numDuration = New-Object System.Windows.Forms.NumericUpDown; $numDuration.Location = New-Object System.Drawing.Point(165, 25); $numDuration.Size = New-Object System.Drawing.Size(100, 22); $numDuration.Minimum = 1; $numDuration.Maximum = 1440; $numDuration.Value = $Config.Collection.DefaultDurationMinutes; $group3.Controls.Add($numDuration)
-
-    $chkForever = New-Object System.Windows.Forms.CheckBox; $chkForever.Text = 'Lien tuc khong gioi han'; $chkForever.Location = New-Object System.Drawing.Point(295, 27); $chkForever.Size = New-Object System.Drawing.Size(200, 20); $chkForever.Font = New-Object System.Drawing.Font("Segoe UI", 9)
-    $chkForever.Add_Click({ $numDuration.Enabled = -not $chkForever.Checked }); $group3.Controls.Add($chkForever)
-
-    $group3.Controls.Add((New-Lbl "Khoang cach (phut):" 15 62 140))
-    $numInterval = New-Object System.Windows.Forms.NumericUpDown; $numInterval.Location = New-Object System.Drawing.Point(160, 60); $numInterval.Size = New-Object System.Drawing.Size(100, 22); $numInterval.Minimum = 1; $numInterval.Maximum = 1440; $numInterval.Value = $Config.Collection.DefaultIntervalMinutes; $group3.Controls.Add($numInterval)
-
-    # ==================== GROUP 4: GUI Log ====================
-    $group4 = New-Group "Cau hinh gui Log qua SFTP" 170
-    $flow.Controls.Add($group4)
-
-    $group4.Controls.Add((New-Lbl "Dia chi may chu:" 15 28 120))
-    $txtHost = New-Txt $Config.Remote.Host 140 25 180; $group4.Controls.Add($txtHost)
-    $group4.Controls.Add((New-Lbl "Username:" 370 28 80))
-    $txtUser = New-Txt $Config.Remote.User 455 25 150; $group4.Controls.Add($txtUser)
-
-    $group4.Controls.Add((New-Lbl "Duong dan tren server:" 15 62 150))
-    $txtRemote = New-Txt $Config.Remote.RemotePath 170 60 545; $group4.Controls.Add($txtRemote)
-
-    $group4.Controls.Add((New-Lbl "SSH Private Key:" 15 96 120))
-    $txtKey = New-Txt $Config.Remote.SSHKeyPath 140 94 530; $group4.Controls.Add($txtKey)
-    $btnKey = New-Object System.Windows.Forms.Button; $btnKey.Text = '...'; $btnKey.Location = New-Object System.Drawing.Point(678, 93); $btnKey.Size = New-Object System.Drawing.Size(45, 24)
-    $btnKey.Add_Click({ $ofd = New-Object System.Windows.Forms.OpenFileDialog; if ($ofd.ShowDialog() -eq 'OK') { $txtKey.Text = $ofd.FileName } }); $group4.Controls.Add($btnKey)
-
-    $btnTest = New-Object System.Windows.Forms.Button; $btnTest.Text = 'Kiem tra ket noi'; $btnTest.Location = New-Object System.Drawing.Point(140, 128); $btnTest.Size = New-Object System.Drawing.Size(150, 26); $btnTest.FlatStyle = 'Flat'
-    $btnTest.Add_Click({
-            $ok = KTKN -TenKN $txtHost.Text
-            $msg = if ($ok) { "✅ Ket noi thanh cong den $($txtHost.Text)" } else { "❌ Khong the ket noi den $($txtHost.Text)" }
-            $icon = if ($ok) { [System.Windows.Forms.MessageBoxIcon]::Information } else { [System.Windows.Forms.MessageBoxIcon]::Error }
-            [System.Windows.Forms.MessageBox]::Show($msg, "Ket qua", [System.Windows.Forms.MessageBoxButtons]::OK, $icon)
-        }); $group4.Controls.Add($btnTest)
-
-    # ==================== GROUP 5: Progress ====================
-    $group5 = New-Group "Trang thai" 70
-    $flow.Controls.Add($group5)
-    $progress = New-Object System.Windows.Forms.ProgressBar; $progress.Location = New-Object System.Drawing.Point(15, 28); $progress.Size = New-Object System.Drawing.Size(775, 28); $progress.Style = 'Continuous'
-    $group5.Controls.Add($progress)
-
-    # ==================== Buttons ====================
-    $btnPanel = New-Object System.Windows.Forms.Panel; $btnPanel.Size = New-Object System.Drawing.Size(810, 55); $flow.Controls.Add($btnPanel)
-
-    $btnStart = New-Object System.Windows.Forms.Button; $btnStart.Text = "▶  Bat dau thu thap"; $btnStart.Location = New-Object System.Drawing.Point(250, 7); $btnStart.Size = New-Object System.Drawing.Size(160, 40)
-    $btnStart.BackColor = [System.Drawing.Color]::FromArgb(0, 120, 215); $btnStart.ForeColor = [System.Drawing.Color]::White; $btnStart.FlatStyle = 'Flat'; $btnStart.Font = New-Object System.Drawing.Font("Segoe UI", 10, [System.Drawing.FontStyle]::Bold)
-    $btnPanel.Controls.Add($btnStart)
-
-    $btnStop = New-Object System.Windows.Forms.Button; $btnStop.Text = "⏹  Dung thu thap"; $btnStop.Location = New-Object System.Drawing.Point(250, 7); $btnStop.Size = New-Object System.Drawing.Size(160, 40)
-    $btnStop.BackColor = [System.Drawing.Color]::FromArgb(200, 50, 50); $btnStop.ForeColor = [System.Drawing.Color]::White; $btnStop.FlatStyle = 'Flat'; $btnStop.Font = New-Object System.Drawing.Font("Segoe UI", 10, [System.Drawing.FontStyle]::Bold); $btnStop.Visible = $false
-    $btnPanel.Controls.Add($btnStop)
-
-    # ==================== GROUP 6: Console ====================
-    $group6 = New-Group "Console Output" 160
-    $flow.Controls.Add($group6)
-    $richLog = New-Object System.Windows.Forms.RichTextBox; $richLog.Location = New-Object System.Drawing.Point(10, 22); $richLog.Size = New-Object System.Drawing.Size(788, 128)
-    $richLog.Font = New-Object System.Drawing.Font("Consolas", 9); $richLog.BackColor = [System.Drawing.Color]::FromArgb(30, 30, 30); $richLog.ForeColor = [System.Drawing.Color]::White
-    $richLog.ReadOnly = $true; $richLog.ScrollBars = 'Both'; $richLog.WordWrap = $false
-    $group6.Controls.Add($richLog)
-    $global:LogOutputControl = $richLog
-
-    # ==================== Lappy initial state ====================
-    $cboMode.Add_SelectedIndexChanged({
-            $isLimited = ($cboMode.SelectedItem -eq 'Limited')
-            $cboLogType.Enabled = $isLimited
-            $dtpStart.Enabled = $isLimited
-            $dtpEnd.Enabled = $isLimited
-            $numDuration.Enabled = (-not $isLimited) -and (-not $chkForever.Checked)
-            $chkForever.Enabled = -not $isLimited
-            $numInterval.Enabled = -not $isLimited
-        })
-    # Apply initial state
-    $cboMode.SelectedIndex = 0
-    $numDuration.Enabled = $false; $chkForever.Enabled = $false; $numInterval.Enabled = $false
-
-    $global:StopCollection = $false
-    $global:ContinuousTimer = $null
-
-    # ==================== Stop button ====================
-    $btnStop.Add_Click({
-            $global:StopCollection = $true
-            if ($global:ContinuousTimer) { $global:ContinuousTimer.Stop() }
-            AddLog "Dang dung qua trinh thu thap..." "WARNING"
-            $progress.Style = 'Continuous'; $progress.MarqueeAnimationSpeed = 0; $progress.Value = 100
-            $btnStop.Visible = $false; $btnStart.Visible = $true
+    # Preflight Check
+    $btnPreflight.Add_Click({
+            $script:LogBox.Clear()
+            AddLog "--- Kiem tra Preflight Prerequisite ---" "INFO"
+            Test-WinLogCollectorPrerequisite `
+                -RemoteHost $Config.Remote.Host -Port $Config.Remote.Port `
+                -SSHKeyPath $Config.Remote.SSHKeyPath -KnownHostsPath $Config.Remote.KnownHostsPath
         })
 
-    # ==================== Start button ====================
-    $btnStart.Add_Click({
+    # Run Once (P0.3: calls Invoke-WinLogCollectorCycle)
+    $btnRunOnce.Add_Click({
+            $btnRunOnce.Enabled = $false
+            $lblStatus.Text = "Trang thai: Dang chay..."
+            $lblStatus.ForeColor = [System.Drawing.Color]::Yellow
             try {
-                $richLog.Clear()
-                AddLog "=== BAT DAU QUA TRINH THU THAP LOG ===" "INFO"
-
-                $Mode = $cboMode.SelectedItem
-                $LogName = $cboLogType.SelectedItem
-                $StartTime = $dtpStart.Value
-                $EndTime = $dtpEnd.Value
-                $FolderBase = $txtFolder.Text
-                $RemoteHost = $txtHost.Text
-                $User = $txtUser.Text
-                $RemotePath = $txtRemote.Text
-                $SSHKey = $txtKey.Text
-                $Channels = $Config.Collection.EventChannels
-                $KhoangPhut = [int]$numInterval.Value
-
-                AddLog "Che do: $Mode" "INFO"
-
-                # Tao thu muc an
-                $FolderLuuLog = Join-Path $FolderBase "HiddenLogs"
-                if (-not (Test-Path $FolderLuuLog)) {
-                    New-Item -Path $FolderLuuLog -ItemType Directory -Force | Out-Null
-                    (Get-Item $FolderLuuLog).Attributes += 'Hidden'
-                    AddLog "Da tao thu muc an: $FolderLuuLog" "SUCCESS"
-                }
-                $ThuMucGui = Join-Path $FolderLuuLog "Gui"
-                $ThuMucChoGui = Join-Path $ThuMucGui $Mode
-                @($ThuMucGui, $ThuMucChoGui) | ForEach-Object {
-                    if (-not (Test-Path $_)) {
-                        New-Item -Path $_ -ItemType Directory -Force | Out-Null
-                        (Get-Item $_).Attributes += 'Hidden'
-                    }
-                }
-
-                if ($Mode -eq "Limited") {
-                    if ($StartTime -ge $EndTime) {
-                        [System.Windows.Forms.MessageBox]::Show("Loi: Thoi gian bat dau phai nho hon thoi gian ket thuc", "Loi", 'OK', 'Error')
-                        return
-                    }
-                    $progress.Value = 30
-                    $TenLog = "${LogName}_$($StartTime.ToString('yyyy-MM-dd_HHmmss'))-$($EndTime.ToString('yyyy-MM-dd_HHmmss')).json"
-                    $DuongDanLog = Join-Path $FolderLuuLog $TenLog
-                    AddLog "Thu thap log $LogName tu $($StartTime.ToString('dd/MM/yyyy HH:mm:ss')) den $($EndTime.ToString('dd/MM/yyyy HH:mm:ss'))..." "INFO"
-                    THUTHAPLOG -DuongDanLog $DuongDanLog -Mode $Mode -StartTime $StartTime -EndTime $EndTime -LogName $LogName -EventChannels $Channels -LogOutput $richLog
-                    if (Test-Path $DuongDanLog) {
-                        $progress.Value = 60
-                        $ok = GUILOGSSH -DuongDanLog $DuongDanLog -RemoteHost $RemoteHost -User $User -DuongDanRemote $RemotePath -ThuMucChoGui $ThuMucChoGui -SSHFolders $SSHKey -Mode $Mode -LogOutput $richLog
-                        $progress.Value = 80
-                        $guiLai = GUILOGCHOGUI -ThuMucChoGui $ThuMucChoGui -RemoteHost $RemoteHost -User $User -DuongDanRemote $RemotePath -Mode $Mode -SSHFolders $SSHKey -LogOutput $richLog
-                        $progress.Value = 100
-                        $msg = if ($guiLai) { "Thu thap va gui log hoan thanh!" } else { "Hoan thanh! Mot so file cho chua gui duoc." }
-                        $icon = if ($guiLai) { 'Information' } else { 'Warning' }
-                        [System.Windows.Forms.MessageBox]::Show($msg, "Thong bao", 'OK', $icon)
-                    }
-                    else {
-                        AddLog "Khong tim thay file log sau khi thu thap." "ERROR"
-                    }
+                $res = Invoke-WinLogCollectorCycle -Context $Context -Mode "limited"
+                if ($res.Success) {
+                    $lblStatus.Text = "Trang thai: Thanh cong"
+                    $lblStatus.ForeColor = [System.Drawing.Color]::LimeGreen
                 }
                 else {
-                    # --- Continuous Mode ---
-                    $btnStart.Visible = $false; $btnStop.Visible = $true
-                    $global:StopCollection = $false
-                    $IntervalMs = [math]::Max(5000, $KhoangPhut * 60 * 1000)
-                    $global:RemainingCycles = if ($chkForever.Checked) { -1 } else { [math]::Max(1, [math]::Ceiling(([int]$numDuration.Value) / $KhoangPhut)) }
-                    $global:DemGuiLai = 0
-                    $global:LastLogtime = (Get-Date).AddMinutes(-$KhoangPhut)
-
-                    AddLog "Bat dau Continuous mode: moi $KhoangPhut phut | Tong: $(if($global:RemainingCycles -eq -1){'Khong gioi han'} else {$global:RemainingCycles} ) lan" "INFO"
-                    $progress.Style = 'Marquee'; $progress.MarqueeAnimationSpeed = 30
-
-                    if ($global:ContinuousTimer) { $global:ContinuousTimer.Stop(); $global:ContinuousTimer.Dispose() }
-                    $global:ContinuousTimer = New-Object System.Windows.Forms.Timer
-                    $global:ContinuousTimer.Interval = $IntervalMs
-
-                    $Script:DoStep = {
-                        if ($global:StopCollection) { $global:ContinuousTimer.Stop(); return }
-                        $global:DemGuiLai++
-                        if ($global:DemGuiLai -ge 5) {
-                            $global:DemGuiLai = 0
-                            AddLog "Kiem tra gui lai thu muc cho..." "INFO"
-                            GUILOGCHOGUI -ThuMucChoGui $ThuMucChoGui -RemoteHost $RemoteHost -User $User -DuongDanRemote $RemotePath -Mode $Mode -SSHFolders $SSHKey -LogOutput $richLog | Out-Null
-                        }
-                        $TGKT = Get-Date
-                        $TenLog = "Continuous_$($global:LastLogtime.ToString('yyyy-MM-dd_HHmmss')).json"
-                        $DuongDanLog = Join-Path $FolderLuuLog $TenLog
-                        AddLog "Thu thap tu $($global:LastLogtime.ToString('HH:mm:ss')) den $($TGKT.ToString('HH:mm:ss'))" "INFO"
-                        THUTHAPLOG -DuongDanLog $DuongDanLog -Mode $Mode -StartTime $global:LastLogtime -EndTime $TGKT -LogName "" -EventChannels $Channels -LogOutput $richLog
-                        $global:LastLogtime = $TGKT.AddMilliseconds(1)
-                        if (Test-Path $DuongDanLog) {
-                            GUILOGSSH -DuongDanLog $DuongDanLog -RemoteHost $RemoteHost -User $User -DuongDanRemote $RemotePath -ThuMucChoGui $ThuMucChoGui -SSHFolders $SSHKey -Mode $Mode -LogOutput $richLog | Out-Null
-                        }
-                        else {
-                            AddLog "Khong co log moi." "INFO"
-                        }
-                        if ($global:RemainingCycles -gt 0) {
-                            $global:RemainingCycles--
-                            if ($global:RemainingCycles -eq 0) {
-                                $global:ContinuousTimer.Stop()
-                                $progress.Style = 'Continuous'; $progress.Value = 100
-                                $btnStop.Visible = $false; $btnStart.Visible = $true
-                                AddLog "Da hoan thanh tat ca cac chu ky thu thap." "SUCCESS"
-                                [System.Windows.Forms.MessageBox]::Show("Thu thap log lien tuc hoan thanh!", "Thong bao", 'OK', 'Information')
-                                return
-                            }
-                            else {
-                                AddLog "Con lai: $($global:RemainingCycles) lan" "INFO"
-                            }
-                        }
-                    }
-                    $global:ContinuousTimer.Add_Tick({ & $Script:DoStep })
-                    & $Script:DoStep   # Chay lan dau tien ngay lap tuc
-                    if (-not $global:StopCollection -and ($global:RemainingCycles -ne 0)) {
-                        $global:ContinuousTimer.Start()
-                    }
+                    $lblStatus.Text = "Trang thai: Co loi (Code $($res.ExitCode))"
+                    $lblStatus.ForeColor = [System.Drawing.Color]::OrangeRed
                 }
             }
-            catch {
-                AddLog "❌ Loi: $_" "ERROR"
-                $btnStop.Visible = $false; $btnStart.Visible = $true
+            finally {
+                $btnRunOnce.Enabled = $true
             }
         })
 
-    [void]$form.ShowDialog()
+    # Timer Tick (P0.3: calls Invoke-WinLogCollectorCycle)
+    $timer.Add_Tick({
+            AddLog "--- Timer Tick: Chu ky tu dong ---" "INFO"
+            Invoke-WinLogCollectorCycle -Context $Context -Mode "continuous" | Out-Null
+        })
+
+    # Start Auto
+    $btnStartAuto.Add_Click({
+            $timer.Start()
+            $btnStartAuto.Enabled = $false
+            $btnStopAuto.Enabled = $true
+            $btnRunOnce.Enabled = $false
+            $lblStatus.Text = "Trang thai: Chay tu dong ($($Config.Collection.DefaultIntervalMinutes) phut)"
+            $lblStatus.ForeColor = [System.Drawing.Color]::Cyan
+            AddLog "Da bat thu thap tu dong moi $($Config.Collection.DefaultIntervalMinutes) phut." "SUCCESS"
+        })
+
+    # Stop Auto
+    $btnStopAuto.Add_Click({
+            $timer.Stop()
+            $btnStartAuto.Enabled = $true
+            $btnStopAuto.Enabled = $false
+            $btnRunOnce.Enabled = $true
+            $lblStatus.Text = "Trang thai: Da dung"
+            $lblStatus.ForeColor = [System.Drawing.Color]::LightGray
+            AddLog "Da dung thu thap tu dong." "WARNING"
+        })
+
+    # Welcome log
+    AddLog "WinLogCollector Agent v0.3.1 khoi dong thanh cong." "SUCCESS"
+    AddLog "SFTP Remote: $($Config.Remote.User)@$($Config.Remote.Host):$($Config.Remote.Port)" "INFO"
+
+    # Show Dialog
+    $form.Add_FormClosing({
+            $timer.Stop()
+            $timer.Dispose()
+        })
+    $form.ShowDialog() | Out-Null
 }

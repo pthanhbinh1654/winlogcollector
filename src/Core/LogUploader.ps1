@@ -1,12 +1,9 @@
 # =====================================================
 # LogUploader.ps1 - Core: Archive, Queue & SFTP Upload
-# Fixes: #1 (separate functions), #2 (RemotePath),
-#         #3 (StrictHostKeyChecking=yes + KnownHosts),
-#         #10 (TCP port check), #16 (put .part rename),
-#         #17 (queue sidecar + backoff + quarantine)
+# Fix P0.5: Zero WinForms dependency in parameters
+# Fix P0.12: Queue policy enforcement (MaxSizeMB, MaxAttempts, Quarantine)
 # =====================================================
 
-# ---- Nen file .jsonl thanh .zip kem manifest ----
 function New-WinLogArchive {
     param(
         [Parameter(Mandatory)][string]$JsonlPath,
@@ -26,14 +23,16 @@ function New-WinLogArchive {
     # SHA-256 cua file JSONL
     $sha256 = (Get-FileHash -Path $JsonlPath -Algorithm SHA256).Hash
 
-    # Dem so dong (record count)
-    $recordCount = (Get-Content $JsonlPath -Encoding UTF8 | Where-Object { $_ -ne "" }).Count
+    # Dem record count qua ReadLines (streaming)
+    $recordCount = 0
+    $reader = [System.IO.File]::ReadLines($JsonlPath)
+    foreach ($line in $reader) { if (-not [string]::IsNullOrWhiteSpace($line)) { $recordCount++ } }
 
-    # Tao manifest.json
+    # Manifest.json
     $manifestPath = Join-Path $env:TEMP "manifest_${batchId}.json"
     @{
         schemaVersion    = "1.0"
-        collectorVersion = "0.3.0"
+        collectorVersion = "0.3.1"
         batchId          = $batchId
         host             = $HostId
         startUtc         = $StartUtc.ToString("o")
@@ -43,7 +42,6 @@ function New-WinLogArchive {
         contentType      = "application/x-ndjson"
     } | ConvertTo-Json | Set-Content $manifestPath -Encoding UTF8
 
-    # Nen ca 2 file vao ZIP
     Compress-Archive -Path @($JsonlPath, $manifestPath) -DestinationPath $zipPath -Force
     Remove-Item $manifestPath -ErrorAction SilentlyContinue
 
@@ -54,31 +52,25 @@ function New-WinLogArchive {
     }
 }
 
-# ---- Kiem tra ket noi TCP port 22 (thay ping) ----
 function Test-SftpConnectivity {
     param(
         [string]$RemoteHost,
         [int]$Port = 22
     )
     try {
-        $result = Test-NetConnection -ComputerName $RemoteHost -Port $Port -InformationLevel Quiet -WarningAction SilentlyContinue
-        return $result
+        return Test-NetConnection -ComputerName $RemoteHost -Port $Port -InformationLevel Quiet -WarningAction SilentlyContinue
     }
     catch {
         return $false
     }
 }
 
-# ---- Upload 1 file .zip len SFTP (put .part -> rename) ----
 function Send-WinLogArchive {
     [CmdletBinding()]
     param(
         [Parameter(Mandatory)]
-        [ValidateScript({
-                (Test-Path $_ -PathType Leaf) -and ([IO.Path]::GetExtension($_) -eq '.zip')
-            })]
+        [ValidateScript({ (Test-Path $_ -PathType Leaf) -and ([IO.Path]::GetExtension($_) -eq '.zip') })]
         [string]$ArchivePath,
-
         [Parameter(Mandatory)][string]$RemoteHost,
         [Parameter(Mandatory)][string]$User,
         [Parameter(Mandatory)][string]$RemoteBasePath,
@@ -88,13 +80,11 @@ function Send-WinLogArchive {
         [string]$Mode = "continuous"
     )
 
-    # Chỉ xử lý .zip, KHÔNG nén lại
     $fileName = Split-Path $ArchivePath -Leaf
     $partName = "$fileName.part"
     $remotePath = "$($RemoteBasePath.TrimEnd('/'))/$($Mode.ToLowerInvariant())"
     $sftpPath = Join-Path $env:TEMP "sftp_$([System.Guid]::NewGuid().ToString('N').Substring(0,6)).txt"
 
-    # Ghi lenh SFTP: put .part -> rename
     @"
 cd $remotePath
 put "$ArchivePath" "$partName"
@@ -125,7 +115,6 @@ bye
     }
 }
 
-# ---- Chuyen archive vao queue co sidecar metadata ----
 function Move-WinLogArchiveToQueue {
     param(
         [string]$ArchivePath,
@@ -133,23 +122,23 @@ function Move-WinLogArchiveToQueue {
         [string]$LastError = ""
     )
     if (-not (Test-Path $QueueDir)) { New-Item $QueueDir -ItemType Directory -Force | Out-Null }
-
     $dest = Join-Path $QueueDir (Split-Path $ArchivePath -Leaf)
     Move-Item -Path $ArchivePath -Destination $dest -Force
 
     $sidecarPath = [IO.Path]::ChangeExtension($dest, ".queue.json")
+    $sidecarTmp = "$sidecarPath.tmp"
     @{
         attempt        = 0
         createdUtc     = [DateTime]::UtcNow.ToString("o")
         nextAttemptUtc = [DateTime]::UtcNow.ToString("o")
         lastError      = $LastError
         state          = "Pending"
-    } | ConvertTo-Json | Set-Content $sidecarPath -Encoding UTF8
+    } | ConvertTo-Json | Set-Content $sidecarTmp -Encoding UTF8
+    Move-Item $sidecarTmp $sidecarPath -Force
 
     return $dest
 }
 
-# ---- Retry toan bo queue voi backoff ----
 function Retry-WinLogQueue {
     param(
         [string]$QueueDir,
@@ -162,40 +151,43 @@ function Retry-WinLogQueue {
         [int]$Port = 22,
         [string]$Mode = "continuous",
         [int]$MaxSizeMB = 2048,
-        [int]$MaxAttempts = 20,
-        [System.Windows.Forms.RichTextBox]$LogOutput = $null
+        [int]$MaxAttempts = 20
     )
 
     if (-not (Test-Path $QueueDir)) { return @{ Success = $true; Sent = 0; Failed = 0 } }
 
-    # Kiem tra dung luong tong queue
     $queueSizeMB = [math]::Round((Get-ChildItem $QueueDir -Filter *.zip -ErrorAction SilentlyContinue | Measure-Object Length -Sum).Sum / 1MB, 2)
     if ($queueSizeMB -gt $MaxSizeMB) {
-        AddLog "Queue dat $queueSizeMB MB (gioi han $MaxSizeMB MB). Bo qua." "WARNING" $LogOutput
+        AddLog "Queue dat $queueSizeMB MB (gioi han $MaxSizeMB MB). Dinh hoa quy trinh thu thap moi." "WARNING"
     }
 
     $zips = Get-ChildItem $QueueDir -Filter "*.zip" -ErrorAction SilentlyContinue
     if (-not $zips) { return @{ Success = $true; Sent = 0; Failed = 0 } }
 
-    AddLog "Queue co $($zips.Count) file can gui lai..." "INFO" $LogOutput
+    AddLog "Queue co $($zips.Count) file can gui lai..." "INFO"
     $sent = 0; $failed = 0
 
     if (-not (Test-SftpConnectivity -RemoteHost $RemoteHost -Port $Port)) {
-        AddLog "Khong ket noi duoc TCP port $Port. Bo qua retry." "WARNING" $LogOutput
+        AddLog "Khong ket noi duoc TCP port $Port. Bo qua retry." "WARNING"
         return @{ Success = $false; Sent = 0; Failed = $zips.Count }
     }
 
     foreach ($zip in $zips) {
         $sidecarPath = [IO.Path]::ChangeExtension($zip.FullName, ".queue.json")
-        $meta = if (Test-Path $sidecarPath) { Get-Content $sidecarPath -Raw | ConvertFrom-Json } else { $null }
+        $meta = if (Test-Path $sidecarPath) {
+            try { Get-Content $sidecarPath -Raw | ConvertFrom-Json } catch { $null }
+        }
+        else { $null }
 
-        # Backer off: bo qua neu chua den gio thu lai
         if ($meta -and $meta.nextAttemptUtc) {
-            $nextTime = [DateTime]::Parse($meta.nextAttemptUtc)
-            if ([DateTime]::UtcNow -lt $nextTime) {
-                AddLog "Bo qua $($zip.Name) – cho den $($nextTime.ToString('HH:mm:ss')) UTC" "INFO" $LogOutput
-                continue
+            try {
+                $nextTime = [DateTime]::Parse($meta.nextAttemptUtc)
+                if ([DateTime]::UtcNow -lt $nextTime) {
+                    AddLog "Bo qua $($zip.Name) - cho den $($nextTime.ToString('HH:mm:ss')) UTC" "INFO"
+                    continue
+                }
             }
+            catch {}
         }
 
         $result = Send-WinLogArchive -ArchivePath $zip.FullName -RemoteHost $RemoteHost `
@@ -203,34 +195,34 @@ function Retry-WinLogQueue {
             -KnownHostsPath $KnownHostsPath -Port $Port -Mode $Mode
 
         if ($result.Success) {
-            AddLog "Gui lai thanh cong: $($zip.Name)" "SUCCESS" $LogOutput
-            Remove-Item $zip.FullName       -ErrorAction SilentlyContinue
-            Remove-Item $sidecarPath        -ErrorAction SilentlyContinue
+            AddLog "Gui lai thanh cong: $($zip.Name)" "SUCCESS"
+            Remove-Item $zip.FullName -ErrorAction SilentlyContinue
+            Remove-Item $sidecarPath  -ErrorAction SilentlyContinue
             $sent++
         }
         else {
-            $attempt = if ($meta) { [int]$meta.attempt + 1 } else { 1 }
-            AddLog "Gui lai that bai lan $($attempt): $($zip.Name) - $($result.Error)" "WARNING" $LogOutput
+            $attempt = if ($meta -and $meta.attempt) { [int]$meta.attempt + 1 } else { 1 }
+            AddLog "Gui lai that bai lan $($attempt): $($zip.Name) - $($result.Error)" "WARNING"
 
-            # Quarantine neuo qua so lan thu
             if ($attempt -ge $MaxAttempts) {
                 if (-not (Test-Path $QuarantineDir)) { New-Item $QuarantineDir -ItemType Directory -Force | Out-Null }
                 Move-Item $zip.FullName $QuarantineDir -Force
                 Move-Item $sidecarPath $QuarantineDir -Force -ErrorAction SilentlyContinue
-                AddLog "Chuyen $($zip.Name) vao Quarantine sau $MaxAttempts lan that bai." "ERROR" $LogOutput
+                AddLog "Chuyen $($zip.Name) vao Quarantine sau $MaxAttempts lan that bai." "ERROR"
             }
             else {
-                # Tinh thoi gian thu lai theo backoff
                 $backoffTable = @(1, 2, 5, 15, 30, 60)
                 $backoffMin = if ($attempt -le $backoffTable.Count) { $backoffTable[$attempt - 1] } else { 60 }
                 $nextAttempt = [DateTime]::UtcNow.AddMinutes($backoffMin)
+                $tmpSide = "$sidecarPath.tmp"
                 @{
                     attempt        = $attempt
-                    createdUtc     = if ($meta) { $meta.createdUtc } else { [DateTime]::UtcNow.ToString("o") }
+                    createdUtc     = if ($meta -and $meta.createdUtc) { $meta.createdUtc } else { [DateTime]::UtcNow.ToString("o") }
                     nextAttemptUtc = $nextAttempt.ToString("o")
                     lastError      = $result.Error
                     state          = "Pending"
-                } | ConvertTo-Json | Set-Content $sidecarPath -Encoding UTF8
+                } | ConvertTo-Json | Set-Content $tmpSide -Encoding UTF8
+                Move-Item $tmpSide $sidecarPath -Force
             }
             $failed++
         }
@@ -238,15 +230,13 @@ function Retry-WinLogQueue {
     return @{ Success = ($failed -eq 0); Sent = $sent; Failed = $failed }
 }
 
-# ---- Ham KTKN cu giu lai (dung Test-NetConnection thay ping) ----
 function KTKN {
     param(
         [string]$TenKN,
-        [int]$Port = 22,
-        [System.Windows.Forms.RichTextBox]$LogOutput = $null
+        [int]$Port = 22
     )
     $ok = Test-SftpConnectivity -RemoteHost $TenKN -Port $Port
     $msg = if ($ok) { "✅ [$TenKN]:$Port co the ket noi." } else { "❌ [$TenKN]:$Port khong ket noi duoc." }
-    AddLog $msg (if ($ok) { "SUCCESS" } else { "WARNING" }) $LogOutput
+    AddLog $msg (if ($ok) { "SUCCESS" } else { "WARNING" })
     return $ok
 }
