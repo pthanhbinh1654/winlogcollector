@@ -1,9 +1,9 @@
 # =====================================================
 # LogCollector.ps1 - Core: Thu thap & Parse Event Log
-# Fix P0.6: Query oldest-first theo RecordID, paginate
-# Fix P0.7: Sau khi co checkpoint, bo time-window
-# Fix P0.8: Drain Ready/ o dau chu ky
-# Fix P0.9: Tach FailedChannels khoi "no event"
+# Fix P0.2: Added -Oldest to Get-WinEvent for first run
+# Fix P0.4: Break batch if event write fails (prevents checkpoint jump)
+# Fix P0.5: Dispose EventRecord ($ev.Dispose())
+# Fix P0.8: Drain Ready/ .ready files at top of cycle
 # =====================================================
 
 function Read-CollectorState {
@@ -56,7 +56,7 @@ function ConvertFrom-WinEventRecord {
             }
         }
         catch {
-            # Dead-letter: event hong - ghi lai de khong mat RecordId
+            # Dead-letter: event hong - ghi lai fallback de khong mat RecordId
             [pscustomobject]@{
                 SchemaVersion = '1.0'
                 RecordId      = $EventRecord.RecordId
@@ -109,16 +109,17 @@ function Get-WinEventBatch {
         }
     }
     else {
-        # Chua co checkpoint: dung FilterHashtable voi FallbackStartTime
+        # Chua co checkpoint: dung FilterHashtable voi FallbackStartTime + -Oldest (Fix P0.2)
         $filter = @{ LogName = $Channel; StartTime = $FallbackStartTime }
         if ($EventIDs.Count -gt 0) { $filter.Id = $EventIDs }
         try {
-            $events = Get-WinEvent -FilterHashtable $filter -MaxEvents $BatchSize -ErrorAction Stop |
-            Sort-Object RecordId
+            $events = Get-WinEvent -FilterHashtable $filter -MaxEvents $BatchSize -Oldest -ErrorAction Stop
             return @{ Events = $events; HasMore = ($events.Count -eq $BatchSize) }
         }
         catch {
-            if ($_.Exception.Message -match 'No events') { return @{ Events = @(); HasMore = $false } }
+            if ($_.Exception.Message -match 'No events' -or $_.Exception.Message -match 'No matching events') {
+                return @{ Events = @(); HasMore = $false }
+            }
             return @{ Events = @(); HasMore = $false; Error = $_.Exception.Message }
         }
     }
@@ -142,7 +143,7 @@ function Invoke-WinLogCollection {
     $failedChs = [System.Collections.Generic.List[string]]::new()
     $totalCount = 0
 
-    # Fix P0.8: Drain existing .ready files truoc
+    # Drain existing .ready files tu chu ky truoc
     $existingReady = Get-ChildItem $OutputDir -Filter "*.ready" -ErrorAction SilentlyContinue
     if ($existingReady) {
         AddLog "Phuc hoi $($existingReady.Count) file .ready tu chu ky truoc." "WARNING"
@@ -191,8 +192,18 @@ function Invoke-WinLogCollection {
                     $lastWritten = $ev.RecordId
                     $count++
                 }
-                catch {}
+                catch {
+                    # Fix P0.4: stop batch on write error to avoid checkpoint jump over un-written events
+                    $channelError = "Loi ghi Event RecordId $($ev.RecordId): $_"
+                    break
+                }
+                finally {
+                    # Fix P0.5: Dispose EventRecord to release native handle
+                    try { $ev.Dispose() } catch {}
+                }
             }
+
+            if ($channelError) { break }
         }
 
         if ($null -ne $writer) { $writer.Flush(); $writer.Close(); $writer.Dispose() }

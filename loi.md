@@ -1,771 +1,598 @@
-Đánh giá lại toàn bộ phiên bản hiện tại
+Commit này đã sửa lớn Main.ps1, collector, uploader, GUI và logger. Đây là static code review; tôi chưa thể chạy integration test thật với Windows Event Log, Task Scheduler và SFTP server trong môi trường hiện tại.
 
-Tôi đã bỏ các kết luận dựa trên bản cũ và đọc lại phiên bản mới tại commit:
+1. Kết luận tổng quan mới
 
-ff44edf4a821718779a7c7cc1d775632661ff374
-fix(P0): Fully address 17 critical issues from loi.md audit
-Ngày cập nhật: 28/07/2026
+Phiên bản này đã tốt hơn rõ rệt:
 
-Commit này thực sự đã thay đổi lớn collector, uploader, config, logging, CI và tài liệu bảo mật. Tuy nhiên, đây là đánh giá tĩnh trên source code hiện tại; tôi chưa chạy được integration test thật trên Windows Event Log và SFTP trong môi trường này.
+GUI và Silent Mode dùng chung một orchestration function.
+GUI đã dùng schema config mới.
+Có checkpoint theo EventRecordID.
+Có phân trang oldest-first sau khi đã có checkpoint.
+Có .ready recovery.
+Có mutex chống chạy song song.
+Có queue sidecar, exponential backoff và quarantine.
+SFTP đã bật host-key verification.
+Logger không còn phụ thuộc trực tiếp vào RichTextBox.
 
-Kết luận mới
+Tuy nhiên, dự án vẫn chưa đạt bảo đảm at-least-once hoàn chỉnh. Tôi còn thấy ba đường có thể mất hoặc bỏ quên dữ liệu:
 
-Phiên bản mới đã tiến bộ rõ rệt về kiến trúc lõi. Nhiều lỗi P0 trước đây đã được sửa đúng. Nhưng sau khi tích hợp code mới, dự án xuất hiện một số lỗi kết nối giữa Core – Main – GUI, trong đó có lỗi khiến GUI có khả năng không khởi động được.
+Lần chạy đầu có hơn 5.000 event.
+Một event bị lỗi khi ghi JSONL nhưng vòng lặp nuốt exception.
+Crash sau khi tạo ZIP nhưng trước khi upload hoặc đưa ZIP vào queue.
 
-Ngoài ra, checkpoint mới chưa đủ bảo đảm không mất log trong các tình huống:
+Ngoài ra, nút Preflight Check hiện gọi một function không tồn tại, nên chức năng này chắc chắn chưa chạy được.
 
-Số event vượt quá MaxEvents.
-Task Scheduler ngừng chạy lâu hơn chu kỳ.
-Chương trình crash sau khi cập nhật checkpoint nhưng trước khi archive/upload.
-Hai instance chạy đồng thời.
+Đánh giá hiện tại:
 
-Vì vậy, trạng thái hiện tại phù hợp với:
+Hạng mục	Điểm
+Kiến trúc Core	7/10
+Độ tin cậy dữ liệu	5.5/10
+Bảo mật	6.5/10
+GUI	5/10
+Queue/SFTP	6/10
+Testing	3/10
+Tài liệu	3.5/10
+Tổng thể	6.1/10
 
-Prototype kỹ thuật khá tốt, nhưng chưa phải collector có bảo đảm at-least-once và chưa sẵn sàng triển khai production.
+Trạng thái phù hợp: prototype/đồ án kỹ thuật tốt, chưa nên gọi là production-ready collector.
 
-1. Những phần đã được sửa tốt
-1.1. Retry không còn nén lại file ZIP
+2. Những lỗi cũ đã được sửa đúng
+2.1. GUI đã dùng đúng Context
 
-Uploader mới đã tách rõ:
-
-New-WinLogArchive
-Send-WinLogArchive
-Move-WinLogArchiveToQueue
-Retry-WinLogQueue
-
-Đây là hướng sửa đúng. Queue giờ gửi lại archive có sẵn thay vì đưa .zip vào hàm nén lần nữa.
-
-1.2. RemotePath đã được sử dụng
-
-Đường dẫn remote hiện được xây dựng từ base path trong cấu hình, sau đó thêm thư mục theo mode. Điều này tốt hơn việc hard-code /limited và /continuous.
-
-1.3. Xác minh SSH host key đã được bật
-
-Code mới dùng:
-
-StrictHostKeyChecking=yes
-UserKnownHostsFile=<KnownHostsPath>
-
-Đây là cải tiến bảo mật quan trọng so với StrictHostKeyChecking=no.
-
-1.4. Upload bằng file tạm rồi rename
-
-Uploader gửi:
-
-batch.zip.part
-
-sau đó mới rename thành tên cuối. Cách này giúp server không xử lý nhầm file upload chưa hoàn tất.
-
-1.5. Config đã chuyển sang subscription theo channel
-
-Cấu hình mới tách Event ID theo từng channel, gồm cả:
-
-Microsoft-Windows-PowerShell/Operational
-
-cho Event ID 4103 và 4104. Thiết kế này đúng hơn một mảng Event ID dùng chung cho tất cả channel.
-
-1.6. Parser Event Log đã dùng XML field name
-
-ConvertFrom-WinEventRecord mới không còn phụ thuộc chủ yếu vào vị trí Properties[index], mà đọc XML và ánh xạ theo tên trường. Điều này ổn định hơn giữa các version event.
-
-1.7. Đã có file trạng thái và Record ID
-
-Collector lưu checkpoint riêng theo channel với LastRecordId. Đây là nền tảng đúng để xây dựng cơ chế thu thập incremental.
-
-1.8. Ghi .tmp rồi chuyển thành .ready
-
-Việc ghi file tạm rồi rename sang .ready giảm nguy cơ uploader lấy file đang ghi dở.
-
-1.9. Queue có sidecar, retry và quarantine
-
-Queue mới đã có attempt count, thời gian retry và thư mục quarantine. Đây là bước nâng cấp đáng kể so với queue chỉ chứa file ZIP.
-
-1.10. Có logging dạng JSON và GitHub Actions
-
-Project đã bổ sung persistent logger, workflow PSScriptAnalyzer/Pester, SECURITY.md, config mẫu và license.
-
-2. Lỗi P0 hiện tại: cần sửa trước khi tiếp tục thêm tính năng
-P0.1. GUI đang được gọi sai số lượng tham số
-
-Trong Main.ps1, GUI được gọi với nhiều tham số:
-
-Show-MainWindow `
-    -Config $ConfigHT `
-    -ReadyDir $ReadyDir `
-    -QueueDir $QueueDir `
-    -QuarantineDir $QuarantineDir `
-    -StateFile $StateFile
-
-Nhưng Show-MainWindow hiện chỉ khai báo:
-
-param(
-    [hashtable]$Config
-)
-
-PowerShell sẽ báo không tìm thấy parameter như ReadyDir, khiến GUI có thể lỗi ngay khi khởi động.
-
-Cách sửa
-
-Không nên tiếp tục truyền năm đường dẫn riêng. Hãy truyền một runtime context:
-
-$Context = @{
-    Config        = $ConfigHT
-    DataDir       = $DataDir
-    ReadyDir      = $ReadyDir
-    QueueDir      = $QueueDir
-    QuarantineDir = $QuarantineDir
-    StateFile     = $StateFile
-}
+Lỗi trước đây Main.ps1 truyền nhiều parameter nhưng Show-MainWindow chỉ nhận Config đã được sửa. Hiện cả hai dùng:
 
 Show-MainWindow -Context $Context
 
-GUI:
+GUI đọc Context.Config, Context.DataDir và schema Collection.Subscriptions.
 
-function Show-MainWindow {
+2.2. GUI và Silent Mode đã dùng chung một chu kỳ
+
+Invoke-WinLogCollectorCycle hiện điều phối:
+
+Retry Queue
+→ Collect
+→ Archive
+→ Upload hoặc Queue
+→ Retry Queue lần cuối
+
+Đây là cải tiến kiến trúc đúng, tránh việc GUI dùng code cũ còn Silent Mode dùng code mới.
+
+2.3. Sau khi có checkpoint, downtime không còn cắt mất log theo thời gian
+
+Khi LastRecordId > 0, collector dùng XPath:
+
+EventRecordID > LastRecordId
+
+và không áp dụng time window. Điều này khắc phục trường hợp Task Scheduler ngừng nhiều giờ rồi chỉ đọc vài phút gần nhất.
+
+2.4. Có khôi phục file .ready
+
+Collector quét các file *.ready còn lại từ lần chạy trước và đưa chúng trở lại danh sách xử lý. Đây là durable-outbox recovery bước đầu.
+
+2.5. Lỗi channel được phân biệt với “không có event”
+
+Collector trả về:
+
+Success
+ReadyFiles
+RecordCount
+FailedChannels
+
+Main chuyển channel failure thành exit code 20, thay vì coi nó như một lần chạy bình thường không có log.
+
+2.6. Queue retry đã được tách đúng
+
+Archive, gửi SFTP, đưa vào queue và retry là các function riêng. Retry không còn nén lại file ZIP. Sidecar cũng được ghi qua .tmp rồi rename.
+
+2.7. Host-key verification đã được bật
+
+Uploader hiện dùng:
+
+StrictHostKeyChecking=yes
+UserKnownHostsFile=...
+BatchMode=yes
+
+Đây là sửa đổi bảo mật đúng so với việc tự động tin mọi server.
+
+2.8. Có mutex chống hai instance
+
+Global\WinLogCollector ngăn hai tiến trình collector đồng thời đọc cùng checkpoint hoặc retry cùng file queue.
+
+3. Các lỗi P0 còn tồn tại
+P0.1. Nút Preflight gọi function không tồn tại
+
+GUI gọi:
+
+Test-WinLogCollectorPrerequisite `
+    -RemoteHost ...
+    -Port ...
+    -SSHKeyPath ...
+    -KnownHostsPath ...
+
+Nhưng function này không tồn tại trong Main.ps1, Security.ps1, LogCollector.ps1 hay LogUploader.ps1. Security.ps1 hiện chỉ có KTADMIN và KTKN. Vì vậy bấm Preflight Check sẽ gặp lỗi “term is not recognized”.
+
+Cần triển khai
+function Test-WinLogCollectorPrerequisite {
+    [CmdletBinding()]
     param(
-        [Parameter(Mandatory)]
         [hashtable]$Context
     )
 
-    $Config = $Context.Config
-}
-P0.2. GUI vẫn sử dụng schema config cũ
+    $checks = [System.Collections.Generic.List[object]]::new()
 
-GUI hiện còn truy cập các field cũ như:
+    # Config fields
+    # sftp.exe
+    # SSH key
+    # known_hosts
+    # TCP port
+    # quyền ghi DataDir
+    # quyền đọc từng Event Log channel
+    # channel enabled
+    # audit policy
+    # dung lượng đĩa
 
-$Config.Local.FolderLuuLog
-$Config.Collection.EventChannels
-
-Trong khi config mới dùng:
-
-Local.DataDir
-Collection.Subscriptions
-
-Do đó, dù sửa parameter mismatch, nhiều control GUI vẫn có thể nhận $null hoặc hiển thị sai cấu hình.
-
-Cách sửa
-
-Xóa toàn bộ logic đọc config cũ khỏi GUI. Danh sách channel phải được lấy từ:
-
-$Config.Collection.Subscriptions |
-    ForEach-Object { $_.Channel }
-P0.3. GUI gọi các hàm không còn tồn tại
-
-GUI vẫn gọi:
-
-GUILOGSSH
-GUILOGCHOGUI
-
-Nhưng uploader mới đã thay bằng:
-
-New-WinLogArchive
-Send-WinLogArchive
-Retry-WinLogQueue
-
-Hai hàm cũ không còn được định nghĩa trong code mới.
-
-Cách sửa tốt nhất
-
-GUI không nên tự ghép từng bước collector và uploader. Cả GUI và Silent Mode phải gọi chung một orchestration function:
-
-Invoke-WinLogCollectorCycle -Context $Context
-
-Như vậy không xảy ra tình trạng Silent Mode dùng luồng mới còn GUI vẫn dùng luồng cũ.
-
-P0.4. GUI kiểm tra sai tên file output
-
-Collector mới tạo:
-
-*.jsonl.tmp
-*.jsonl.ready
-
-Nhưng GUI vẫn kiểm tra một đường dẫn dạng .json. Vì vậy collector có thể thu thập thành công nhưng GUI cho rằng không có file output.
-
-Không nên để GUI tự đoán tên file. Invoke-WinLogCollection cần trả về object:
-
-[pscustomobject]@{
-    Success       = $true
-    ReadyFiles    = $readyFiles
-    RecordCount   = $recordCount
-    FailedChannels = @()
-}
-P0.5. Core vẫn phụ thuộc vào WinForms
-
-Một số function trong Core hoặc Logger khai báo parameter kiểu:
-
-[System.Windows.Forms.RichTextBox]
-
-Trong khi Main.ps1 dot-source các file Core trước khi gọi Add-Type -AssemblyName System.Windows.Forms. Silent Mode không cần giao diện nhưng vẫn phải parse các type GUI này.
-
-Trong Windows PowerShell 5.1, assembly chưa được nạp có thể cần Add-Type trước khi sử dụng type của assembly. Điều này tạo nguy cơ Silent Mode lỗi ngay ở bước dot-source, trước khi đi vào nhánh headless.
-
-Cách sửa
-
-Core không được biết RichTextBox.
-
-Thay:
-
-function AddLog {
-    param(
-        [System.Windows.Forms.RichTextBox]$LogBox
-    )
-}
-
-bằng:
-
-function Write-CollectorLog {
-    param(
-        [string]$Message,
-        [string]$Level = 'Information',
-        [scriptblock]$Sink
-    )
-
-    # Ghi file persistent trước.
-
-    if ($Sink) {
-        & $Sink $Message $Level
+    [pscustomobject]@{
+        Success = -not ($checks | Where-Object Status -eq 'Failed')
+        Checks  = $checks
     }
 }
 
-GUI có thể truyền callback riêng để cập nhật RichTextBox.
+Function này phải được gọi cả trong GUI lẫn Silent Mode, không chỉ đặt sau một nút.
 
-P0.6. MaxEvents = 50000 có thể gây mất log vĩnh viễn
+P0.2. Lần chạy đầu vẫn có thể mất event nếu vượt 5.000 bản ghi
 
-Collector giới hạn mỗi truy vấn ở một số lượng event cố định. Get-WinEvent -MaxEvents mặc định trả về event từ mới đến cũ. Nếu khoảng truy vấn có hơn 50.000 event:
+Khi chưa có checkpoint, code hiện dùng:
 
-Collector chỉ nhận 50.000 event mới nhất.
-Sau đó cập nhật checkpoint tới Record ID lớn nhất.
-Những event cũ hơn nhưng chưa được thu thập sẽ nằm dưới checkpoint.
-Các lần sau không bao giờ lấy lại chúng.
+Get-WinEvent `
+    -FilterHashtable $filter `
+    -MaxEvents $BatchSize |
+    Sort-Object RecordId
 
-Đây là lỗi mất dữ liệu thực sự, không chỉ là vấn đề hiệu năng.
+Get-WinEvent mặc định trả event từ mới nhất tới cũ nhất. Vì vậy nếu khoảng fallback có 20.000 event, collector chỉ lấy 5.000 event mới nhất, sau đó sort riêng 5.000 event này và checkpoint tới Record ID cao nhất. 15.000 event cũ hơn sẽ không bao giờ được lấy lại. Microsoft cũng xác nhận Get-WinEvent mặc định trả newest-first.
 
-Cách sửa
+Bản sửa tối thiểu
+$events = Get-WinEvent `
+    -FilterHashtable $filter `
+    -MaxEvents $BatchSize `
+    -Oldest `
+    -ErrorAction Stop
 
-Đọc theo thứ tự cũ đến mới và phân trang theo Record ID:
+Sau batch đầu tiên, vòng lặp tiếp tục bằng:
 
-EventRecordID > LastRecordId
-ORDER BY oldest first
-LIMIT BatchSize
+EventRecordID > lastWritten
+Bản sửa tốt hơn
 
-Lặp đến khi batch trả về ít hơn BatchSize.
+Dùng EventLogQuery/EventLogReader cho cả lần đầu và các lần tiếp theo, với XPath kết hợp:
 
-Với PowerShell, có thể dùng XPath:
+TimeCreated >= InitialLookback
+EventID thuộc subscription
+EventRecordID > checkpoint
 
-$xpath = "*[System[EventRecordID > $LastRecordId]]"
+Như vậy chỉ có một cơ chế query, tránh hai nhánh có hành vi khác nhau.
 
-hoặc dùng trực tiếp EventLogQuery/EventLogReader với ReverseDirection = $false.
+P0.3. ZIP có thể bị bỏ quên vĩnh viễn sau crash
 
-Không được cập nhật checkpoint vượt qua event chưa ghi bền vững.
+Luồng hiện tại:
 
-P0.7. Có checkpoint nhưng vẫn mất log sau downtime
+.ready
+→ New-WinLogArchive tạo ZIP
+→ xóa .ready
+→ Send-WinLogArchive
+→ thành công: xóa ZIP
+→ thất bại: chuyển ZIP vào Queue
 
-Trong Silent Mode, khoảng thu thập vẫn được xác định từ thời gian hiện tại, ví dụ vài phút gần nhất. Dù state có LastRecordId, filter vẫn chứa StartTime và EndTime.
-
-Giả sử task dự kiến chạy mỗi 3 phút nhưng máy tắt 2 giờ:
-
-LastRecordId = 1000
-Hiện tại       = 10:00
-StartTime      = 09:57
-
-Các event từ 08:00 đến 09:57 có Record ID lớn hơn 1000 nhưng vẫn bị loại bởi StartTime. Checkpoint không cứu được trường hợp này.
-
-Nguyên tắc đúng
-Lần đầu chạy: dùng InitialLookbackMinutes.
-Đã có checkpoint: query theo EventRecordID > LastRecordId, không giới hạn bằng khoảng 3 phút.
-Có thể thêm một ngưỡng thời gian rất rộng để bảo vệ, nhưng Record ID phải là điều kiện chính.
-P0.8. File .ready cũ không được phục hồi sau crash
-
-Collector thực hiện gần đúng thứ tự:
-
-Ghi JSONL
-Rename thành .ready
-Cập nhật checkpoint
-Trả danh sách ReadyFiles
-Main archive/upload danh sách đó
-
-Vấn đề xảy ra nếu chương trình crash sau khi cập nhật checkpoint nhưng trước khi archive:
-
-Ready/batch.jsonl.ready vẫn còn
-Checkpoint đã vượt qua batch
-
-Lần chạy sau, Main.ps1 chỉ xử lý danh sách file vừa được collector trả về. Nó không quét tất cả file .ready tồn tại từ lần trước. File này sẽ bị bỏ quên vĩnh viễn.
+Nếu process crash sau khi xóa .ready nhưng trước khi upload hoặc queue, file ZIP vẫn nằm trong Ready. Lần chạy sau collector chỉ quét *.ready, không quét *.zip, nên ZIP đó không bao giờ được xử lý tiếp.
 
 Cách sửa
 
-Mỗi chu kỳ phải bắt đầu bằng việc drain durable outbox:
+Đầu mỗi chu kỳ phải drain cả hai loại:
 
-1. Quét Ready/*.jsonl.ready
-2. Tạo archive cho từng file
-3. Quét Ready/*.zip
-4. Upload hoặc chuyển Queue
-5. Retry Queue
-6. Sau đó mới thu thập batch mới
-7. Drain Ready lần nữa
+$pendingJsonl = Get-ChildItem $Context.ReadyDir -Filter '*.ready'
+$pendingZips  = Get-ChildItem $Context.ReadyDir -Filter '*.zip'
 
-Việc checkpoint sau .ready là chấp nhận được chỉ khi .ready là durable outbox luôn được phục hồi ở lần chạy tiếp theo.
+Thứ tự:
 
-P0.9. Lỗi đọc channel bị coi là “không có event”
+1. Upload hoặc queue toàn bộ ZIP cũ
+2. Archive toàn bộ JSONL ready
+3. Upload ZIP mới
+4. Collect batch mới
+5. Drain outbox lần nữa
 
-Trong collector, lỗi Get-WinEvent của từng channel được log rồi continue. Nếu tất cả channel đều lỗi, collector có thể trả về không có file. Main.ps1 sau đó ghi “không có event mới” và kết thúc như một lần chạy thành công.
+Tốt hơn nữa, đổi tên thư mục:
 
-Ví dụ:
+Outbox\Jsonl
+Outbox\Archive
+Queue
+Quarantine
 
-Task không có quyền đọc Security.
-Channel bị disable.
-XPath không hợp lệ.
-Event Log service gặp lỗi.
+Mỗi file phải luôn nằm trong một trạng thái rõ ràng.
 
-Tất cả có thể bị hiểu nhầm là không có dữ liệu.
+P0.4. catch {} có thể làm mất riêng một event
 
-Kết quả cần trả về
-[pscustomobject]@{
-    Success        = $FailedChannels.Count -eq 0
-    CollectedCount = $TotalCount
-    ReadyFiles     = $ReadyFiles
-    FailedChannels = $FailedChannels
+Trong vòng lặp ghi event:
+
+foreach ($ev in $batch) {
+    try {
+        $parsed = ConvertFrom-WinEventRecord $ev
+        $writer.WriteLine(...)
+        $lastWritten = $ev.RecordId
+    }
+    catch {}
 }
 
-Nếu một subscription bắt buộc thất bại, Silent Mode phải trả exit code khác 0.
+Giả sử event Record ID 1002 ghi lỗi, nhưng 1003 ghi thành công:
 
-P0.10. Chưa có mutex chống hai instance chạy đồng thời
+1001 → ghi được
+1002 → bị bỏ qua
+1003 → ghi được
+checkpoint → 1003
 
-Nếu Task Scheduler bắt đầu instance mới khi instance cũ chưa kết thúc, hai process có thể đồng thời:
+Event 1002 sau đó bị checkpoint vượt qua và mất vĩnh viễn.
 
-Đọc cùng checkpoint.
-Thu thập trùng event.
-Ghi state đè nhau.
-Retry cùng một queue file.
-Một process move file trong khi process khác upload.
+Nguyên tắc sửa
 
-Cần named mutex:
+Không được tiếp tục sang Record ID cao hơn nếu một record chưa được durable-write.
 
-$mutex = [Threading.Mutex]::new(
-    $false,
-    'Global\WinLogCollector'
-)
+foreach ($ev in $batch) {
+    try {
+        $parsed = ConvertFrom-WinEventRecord -EventRecord $ev
+        $json = $parsed | ConvertTo-Json -Depth 10 -Compress
+        $writer.WriteLine($json)
 
-if (-not $mutex.WaitOne(0)) {
-    Write-CollectorLog `
-        -Level Warning `
-        -Message 'Another collector instance is running.'
-
-    exit 12
+        $lastWritten = $ev.RecordId
+        $count++
+    }
+    catch {
+        $channelError = "RecordId $($ev.RecordId): $($_.Exception.Message)"
+        break
+    }
+    finally {
+        $ev.Dispose()
+    }
 }
 
-Task Scheduler cũng nên cấu hình:
+if ($channelError) {
+    break
+}
 
-If the task is already running:
-Do not start a new instance
-P0.11. Preflight được mô tả trong commit nhưng chưa được triển khai
+Parser đã có fallback object khi parse XML lỗi, nên lỗi lọt tới outer catch thường là lỗi serialization, writer hoặc tài nguyên. Khi đó nên dừng batch thay vì bỏ qua.
 
-Commit message đề cập việc bổ sung prerequisite/preflight. Tuy nhiên, Security.ps1 hiện vẫn chủ yếu chứa KTADMIN và kiểm tra kết nối kiểu cũ; không có function hoàn chỉnh như:
+P0.5. EventRecord không được dispose
 
+Code dispose EventLogReader, nhưng từng object $ev được giữ trong list và không được Dispose(). EventRecord triển khai IDisposable và Microsoft mô tả Dispose() dùng để giải phóng tài nguyên của object. Với backlog lớn, điều này có thể tạo áp lực native handles và bộ nhớ.
+
+Giải pháp tốt hơn là không trả nguyên EventRecord ra list. Đọc, parse, serialize và dispose từng event ngay trong vòng lặp streaming.
+
+P0.6. Queue đầy chỉ được cảnh báo, không thực sự “đóng băng”
+
+Code ghi:
+
+if ($queueSizeMB -gt $MaxSizeMB) {
+    AddLog "... Dinh hoa quy trinh thu thap moi."
+}
+
+Nhưng sau cảnh báo, Main vẫn tiếp tục thu thập và tạo thêm log. Vì vậy nhận xét trong comment “Queue policy enforcement” chưa đúng với hành vi thực tế.
+
+Cần trả trạng thái rõ ràng
+return @{
+    Success    = $false
+    QueueFull  = $true
+    QueueSizeMB = $queueSizeMB
+    Sent       = 0
+    Failed     = $zips.Count
+}
+
+Main:
+
+$retry1 = Retry-WinLogQueue ...
+
+if ($retry1.QueueFull) {
+    AddLog 'Queue đầy. Tạm dừng thu thập để bảo vệ ổ đĩa.' 'ERROR'
+
+    return [pscustomobject]@{
+        Success  = $false
+        ExitCode = 50
+    }
+}
+P0.7. Kết quả retry bị Main bỏ qua
+
+Main lưu:
+
+$retry1 = Retry-WinLogQueue ...
+$retry2 = Retry-WinLogQueue ...
+
+nhưng không dùng Success, Failed hoặc Sent để tính exitCode. Hệ quả:
+
+Queue cũ gửi thất bại nhưng task vẫn có thể trả exit code 0.
+Upload mới thất bại, được retry thành công ngay sau đó, nhưng exit code vẫn giữ 40.
+Trạng thái GUI/Scheduler không phản ánh trạng thái queue thật.
+
+Kết quả chu kỳ cần chứa:
+
+Queued
+PendingQueue
+SentFromQueue
+Quarantined
+QueueFull
+FailedChannels
+
+Success nên dựa trên health policy, không chỉ dựa trên upload vừa tạo trong chu kỳ hiện tại.
+
+P0.8. MaxAgeDays có trong config nhưng hoàn toàn chưa được dùng
+
+Config khai báo:
+
+"MaxAgeDays": 14
+
+Main cũng đọc giá trị này, nhưng Retry-WinLogQueue không có parameter MaxAgeDays và không kiểm tra tuổi archive.
+
+Cần chọn policy rõ ràng:
+
+Quá MaxAgeDays
+→ chuyển Quarantine
+→ ghi operational alert
+→ tuyệt đối không xóa im lặng
+4. Những vấn đề P1 cần cải tiến
+4.1. GUI vẫn bị block
+
+System.Windows.Forms.Timer.Tick và button click gọi trực tiếp toàn bộ chu kỳ collector, nén và SFTP ngay trên UI thread. Khi Get-WinEvent, Compress-Archive hoặc SFTP chậm, cửa sổ sẽ “Not Responding”. Nút Stop chỉ dừng timer kế tiếp, không hủy chu kỳ đang chạy.
+
+Nên dùng background runspace hoặc tách GUI khỏi agent:
+
+GUI
+  → đọc config và trạng thái
+  → gửi lệnh chạy
+
+Agent/Scheduled Task
+  → collect
+  → checkpoint
+  → outbox
+  → SFTP
+4.2. Security.ps1 vẫn là legacy code
+
+File này còn:
+
+KTADMIN.
+ExecutionPolicy Bypass.
+Ping thay vì SFTP preflight.
+Parameter kiểu System.Windows.Forms.RichTextBox.
+Function KTKN trùng tên với function trong LogUploader.ps1.
+
+Main dot-source Security.ps1 trước khi nạp WinForms, nên Silent Mode vẫn còn dependency GUI không cần thiết; function KTKN sau đó còn bị uploader định nghĩa đè.
+
+Nên xóa file cũ và thay bằng:
+
+Test-WinLogCollectorPrivilege
 Test-WinLogCollectorPrerequisite
+Test-WinLogChannelAccess
+Test-SftpConfiguration
 
-Main.ps1 cũng chưa gọi một preflight tương ứng. Ngoài ra còn có function KTKN trùng tên giữa các file, nên function được dot-source sau có thể ghi đè function trước.
+Tất cả phải độc lập WinForms.
 
-Preflight cần kiểm tra ít nhất:
+4.3. State hỏng bị âm thầm coi như chưa từng chạy
+try {
+    ConvertFrom-Json
+}
+catch {}
 
-Config hợp lệ
-Quyền đọc từng channel
-Channel có tồn tại và đang enabled
-SFTP executable
-Private-key file
-Known-hosts file
-Quyền ACL của private key
-Kết nối TCP port 22
-Remote folder tồn tại
-Audit Process Creation
-Include command line in process creation events
-PowerShell Script Block Logging
-Dung lượng ổ đĩa
-Quyền ghi state/queue/log
+return @{}
 
-Event 4688 chỉ có command line khi policy tương ứng được bật; còn Event 4104 phụ thuộc Script Block Logging và được ghi trong PowerShell Operational channel.
+Nếu state.json bị hỏng, collector reset checkpoint và có thể thu thập trùng dữ liệu mà không phát cảnh báo.
 
-P0.12. Queue policy mới chỉ được khai báo, chưa được cưỡng chế đầy đủ
+Nên:
 
-Config có các field như:
+state.json parse lỗi
+→ copy sang state.corrupt.<timestamp>.json
+→ không ghi đè ngay
+→ trả trạng thái Degraded hoặc Failed
+4.4. Chưa phát hiện Event Log clear hoặc rollover
 
-MaxSizeMB
-MaxAgeDays
-MaxAttempts
+Nếu Windows Event Log bị clear và Record ID bắt đầu lại thấp hơn checkpoint, query:
 
-Nhưng:
+EventRecordID > checkpoint-cũ
 
-MaxAgeDays chưa được sử dụng đầy đủ trong luồng Main/retry.
-Khi queue vượt MaxSizeMB, code chủ yếu log cảnh báo, chưa có chiến lược dừng thu thập hoặc bảo vệ ổ đĩa.
-Kết quả của các lần retry được lưu nhưng chưa tác động rõ tới exit code.
-Nếu sidecar JSON hỏng, ConvertFrom-Json hoặc parse ngày có thể làm hỏng toàn bộ vòng retry.
-Chính sách hợp lý
-Queue < 80% giới hạn: hoạt động bình thường
-Queue 80–100%: Warning/Degraded
-Queue >= 100%: dừng thu thập mới hoặc chuyển sang emergency retention
-Sidecar hỏng: chuyển file + sidecar sang Quarantine
-Quá MaxAttempts: Quarantine
-Quá MaxAgeDays: Quarantine hoặc xóa theo policy rõ ràng
+có thể không trả event mới trong thời gian dài.
 
-Không được xóa log im lặng.
+Cần lưu thêm:
 
-3. Các vấn đề P1 về độ chính xác và khả năng bảo trì
-3.1. Batch ID chưa được giữ xuyên suốt pipeline
+LogCreationTime
+OldestRecordNumber
+NewestRecordNumber
+LogFileId/generation
 
-Collector tạo file, archive lại tạo thêm metadata/batch ID khác. Điều này làm khó truy vết một batch từ:
+Khi currentNewestRecordId < checkpoint, phải:
 
-collection → ready → archive → queue → SFTP → ingestion
+Ghi cảnh báo log reset.
+Tạo generation mới.
+Khởi tạo lại checkpoint theo policy.
+Không âm thầm coi là “không có event”.
+4.5. Một backlog lớn bị ghi vào duy nhất một file
 
-Nên sinh BatchId ngay khi bắt đầu collection và dùng cùng ID trong:
+Mặc dù mỗi query lấy 5.000 event, vòng while tiếp tục ghi mọi page vào cùng một .jsonl.tmp. Nếu backlog có hàng triệu event, file có thể rất lớn và một chu kỳ chạy quá lâu.
 
-Tên file.
-JSON log.
-Sidecar.
-Manifest.
-Checkpoint transaction.
-Server ingestion.
-3.2. Manifest chưa đủ dữ liệu forensic
+Nên rotate theo điều kiện:
 
-Manifest nên có:
+50.000 record
+hoặc 100 MB
+hoặc 5 phút collection
+
+Mỗi phần có checkpoint/manifest riêng.
+
+4.6. Manifest chưa phản ánh batch thực tế
+
+Collector tạo một batchId trong tên JSONL, nhưng archive tạo batchId mới. Main không truyền StartUtc/EndUtc, nên hai giá trị mặc định gần như là thời điểm nén, không phải thời gian event đầu và cuối. Manifest cũng chưa có channel, first/last Record ID hoặc collector batch ID.
+
+Nên truyền metadata xuyên suốt:
 
 {
-  "schemaVersion": "1.0",
-  "collectorVersion": "0.3.1",
-  "agentId": "...",
-  "hostname": "...",
   "batchId": "...",
+  "agentId": "...",
   "channel": "Security",
   "firstRecordId": 1001,
   "lastRecordId": 1500,
   "firstEventTimeUtc": "...",
   "lastEventTimeUtc": "...",
   "recordCount": 500,
-  "eventSha256": "..."
+  "sha256": "..."
 }
+4.7. Lệnh SFTP cần được kiểm thử lại cách quote argument
 
-Hiện một số thời gian trong manifest/state phản ánh collection window hoặc thời điểm hiện tại, không nhất thiết là thời gian event đầu/cuối thực tế.
+Mảng $sftpArgs tự chèn dấu nháy vào SSHKeyPath, KnownHostsPath và batch-file path:
 
-3.3. Đếm record bằng cách đọc lại toàn bộ file
+'-i', "`"$SSHKeyPath`""
+'-b', "`"$sftpPath`""
 
-Uploader hiện có thao tác tương tự:
+Khi gọi native executable bằng argument array, việc tự chèn dấu nháy như vậy dễ tạo khác biệt giữa Windows PowerShell 5.1 và PowerShell 7, đặc biệt với đường dẫn có dấu cách.
 
-Get-Content file | Where-Object { ... }
+Nên truyền giá trị thô:
 
-để đếm dòng. Cách này đọc lại toàn bộ JSONL vào pipeline, làm giảm lợi ích của việc streaming collector.
+$sftpArgs = @(
+    '-o', 'StrictHostKeyChecking=yes'
+    '-o', "UserKnownHostsFile=$KnownHostsPath"
+    '-o', 'BatchMode=yes'
+    '-o', 'ConnectTimeout=15'
+    '-P', $Port
+    '-i', $SSHKeyPath
+    '-b', $sftpPath
+    "$User@$RemoteHost"
+)
 
-Collector nên trả sẵn RecordCount, hoặc dùng:
+Sau đó viết integration test với đường dẫn chứa khoảng trắng.
 
-[IO.File]::ReadLines($Path)
+4.8. SFTP chưa thật sự idempotent
 
-và đếm streaming.
+Nếu server đã rename .part thành file cuối nhưng client mất kết nối trước khi nhận exit code thành công, client có thể đưa archive vào queue. Retry sau đó gặp file cuối đã tồn tại và có thể thất bại liên tục dù server đã nhận đủ dữ liệu.
 
-3.4. Parser chưa bao phủ toàn bộ dạng Event XML
+Cần một trong các giải pháp:
 
-Parser hiện tập trung vào:
+Tên archive immutable bằng Batch ID và server deduplicate.
+Server trả acknowledgement theo Batch ID.
+Trước retry, kiểm tra file đích và checksum.
+Ingestion server lưu batchId unique.
+4.9. Sidecar hỏng chưa được xử lý rõ
 
-Event.EventData.Data
+Nếu .queue.json không parse được, code coi metadata là $null và bắt đầu lại từ attempt 1. Lịch sử retry và tuổi file bị mất.
 
-Nhưng Windows Event XML còn có thể chứa:
+Nên chuyển cả ZIP và sidecar lỗi sang Quarantine, hoặc reconstruct metadata dựa trên file creation time và ghi cảnh báo rõ ràng.
 
-UserData
-RenderingInfo
-Correlation
-RelatedActivityID
+4.10. Kiểm tra “No events” phụ thuộc ngôn ngữ hệ điều hành
 
-Nên lưu thêm:
+Code kiểm tra:
 
-RawXml
-ActivityId
-RelatedActivityId
-Keywords
-Opcode
-Task
-Version
+$_.Exception.Message -match 'No events'
 
-Đối với dữ liệu không thể normalize, RawXml là fallback quan trọng phục vụ forensic.
+Trên Windows dùng locale khác tiếng Anh, message có thể không chứa chuỗi này và một channel không có event sẽ bị đánh dấu lỗi.
 
-3.5. Một event lỗi có thể ảnh hưởng cả channel
+Nên kiểm tra exception type, native error code hoặc dùng query API trả $null, không parse nội dung message.
 
-Các thao tác như:
+4.11. Mutex có race nhỏ khi elevation
 
-$Event.Message
-$Event.ToXml()
-ConvertTo-Json
+Process thường đang giữ mutex, gọi Start-Process -Verb RunAs, rồi mới release mutex. Elevated process có thể khởi động nhanh hơn và thấy mutex đang tồn tại, sau đó exit code 12.
 
-đều có khả năng lỗi với một record cụ thể. Không nên để một event hỏng làm dừng toàn bộ batch.
+Nên kiểm tra elevation trước khi acquire mutex, hoặc release mutex trước Start-Process.
 
-Luồng an toàn:
+Ngoài ra Silent Mode release mutex trước exit, rồi finally lại release lần nữa. Exception đang bị nuốt nên chưa gây crash, nhưng logic lifecycle không sạch.
 
-foreach event:
-    try parse
-    catch:
-        ghi raw/dead-letter record
-        tiếp tục
+5. Testing và CI hiện chưa bảo vệ project
 
-Dead-letter local nên chứa:
+Repo hiện không có thư mục tests/, nhưng CI chỉ in:
 
-{
-  "channel": "Security",
-  "recordId": 12345,
-  "error": "...",
-  "rawXml": "..."
-}
-3.6. File .tmp lỗi chưa có lifecycle rõ ràng
+No tests directory found.
 
-Nếu process crash hoặc parser exception trước rename, .tmp có thể tồn tại lâu dài.
+và vẫn thành công. Vì vậy badge CI, nếu xanh, chưa chứng minh collector hoạt động đúng.
 
-Khi khởi động:
-
-.tmp mới và đang được process giữ → bỏ qua
-.tmp cũ hơn ngưỡng → kiểm tra và recover/quarantine
-.ready → tiếp tục archive
-.zip → tiếp tục upload
-3.7. GUI vẫn chạy công việc nặng trên UI thread
-
-GUI dùng WinForms event handler/timer để chạy:
-
-Get-WinEvent
-Nén file
-SFTP
-Retry
-
-Các tác vụ này có thể làm cửa sổ treo. Nút Stop chỉ chặn tick kế tiếp chứ không hủy thao tác đang chạy.
-
-Giải pháp tốt hơn:
-
-GUI = configuration + status
-Agent = collection + queue + upload
-
-GUI không nên sở hữu vòng đời collector.
-
-3.8. Chưa thiết lập ACL cho dữ liệu local
-
-SECURITY.md nói về việc bảo vệ thư mục dữ liệu, nhưng Main.ps1 hiện chủ yếu tạo directory, chưa có bước cài ACL rõ ràng. Log 4688 và 4104 có thể chứa command line hoặc script content nhạy cảm.
-
-Nên có installer chạy một lần:
-
-C:\ProgramData\WinLogCollector
-
-với quyền chỉ dành cho:
-
-SYSTEM
-Administrators
-WinLogCollector service account
-
-Không nên để mỗi lần collector chạy lại tự thay đổi ACL.
-
-3.9. README không còn đồng bộ với code
-
-README hiện vẫn còn nhiều hướng dẫn thuộc phiên bản cũ, chẳng hạn:
-
-Schema FolderLuuLog.
-EventChannels.
-Thư mục HiddenLogs.
-Ping connectivity.
-ExecutionPolicy Bypass.
-Cấu hình SSH cũ.
-URL clone placeholder hoặc thông tin GUI cũ.
-
-Các hướng dẫn này hiện mâu thuẫn với config và uploader mới. Người dùng làm theo README có thể triển khai sai hoặc vô hiệu hóa các cải tiến bảo mật vừa thêm.
-
-README cần được viết lại sau khi ổn định orchestration, không nên chỉnh từng đoạn nhỏ trên tài liệu cũ.
-
-3.10. CI có thể thành công dù không có test
-
-Workflow hiện chạy Pester nếu tìm thấy thư mục test, nhưng có thể chỉ thông báo không có test và tiếp tục. Commit hiện cũng chưa bổ sung bộ test thực tế tương ứng với các thay đổi lớn.
-
-CI nên fail khi không có test:
+CI phải fail khi không có test:
 
 if (-not (Test-Path tests)) {
-    throw 'Tests directory is required.'
+    throw 'tests directory is required.'
 }
 
 $result = Invoke-Pester -Path tests -PassThru
 
-if ($result.FailedCount -gt 0 -or $result.TotalCount -eq 0) {
+if ($result.TotalCount -eq 0 -or $result.FailedCount -gt 0) {
     exit 1
 }
-3.11. Chưa có JSON Schema validation
+Bộ test bắt buộc
+Collector invariant
+Lần đầu có 12.000 event → thu đủ 12.000
+Checkpoint 5.000 → chỉ lấy Record ID > 5.000
+Một event serialize lỗi → không checkpoint vượt qua event đó
+Channel không có event → Success, count 0
+Channel không có quyền → FailedChannels chứa channel
+Crash recovery
+Crash sau .tmp
+Crash sau .ready
+Crash sau tạo ZIP
+Crash sau xóa .ready
+Crash sau upload .part
+Crash sau remote rename
 
-Code chủ yếu kiểm tra file config có parse được JSON hay không. Điều đó không phát hiện:
+Sau mỗi tình huống phải chứng minh:
 
-Thiếu KnownHostsPath.
-Port sai kiểu.
-Subscription không có channel.
-EventIDs là chuỗi.
-Queue limit âm.
-Hai subscription trùng nhau.
-
-Nên thêm:
-
-config/config.schema.json
-
-và function:
-
-Test-WinLogCollectorConfiguration
-3.12. Security.ps1 còn legacy code
-
-Các function cũ như KTADMIN, KTKN và logic ping/elevation nên được:
-
-Xóa nếu không dùng.
-Hoặc đổi thành function chuẩn.
-Không được trùng tên với uploader.
-Không tự chạy ExecutionPolicy Bypass.
-Không tự bật UAC trong Silent Mode.
-4. Kiến trúc nên áp dụng cho bản tiếp theo
-
-Điểm quan trọng nhất là không để Main, GUI và Silent Mode tự xây ba luồng xử lý khác nhau.
-
-Một orchestration function duy nhất
-function Invoke-WinLogCollectorCycle {
-    [CmdletBinding()]
-    param(
-        [Parameter(Mandatory)]
-        [CollectorContext]$Context
-    )
-
-    # 1. Acquire mutex
-    # 2. Validate config and prerequisites
-    # 3. Recover stale temporary files
-    # 4. Drain Ready JSONL files
-    # 5. Drain Ready ZIP archives
-    # 6. Retry Queue
-    # 7. Collect events after checkpoint
-    # 8. Commit durable ready files
-    # 9. Drain Ready again
-    # 10. Return structured health result
-}
-
-Cả hai entry point chỉ gọi function này:
-
-Silent Mode
-    └── Invoke-WinLogCollectorCycle
-
-GUI
-    └── background runspace
-            └── Invoke-WinLogCollectorCycle
-Kết quả trả về
-[pscustomobject]@{
-    Success         = $true
-    ExitCode        = 0
-    Collected       = 1250
-    Archived        = 2
-    Uploaded        = 2
-    Queued          = 0
-    Quarantined     = 0
-    PendingReady    = 0
-    PendingQueue    = 0
-    FailedChannels  = @()
-    StartedUtc      = $StartedUtc
-    CompletedUtc    = [DateTime]::UtcNow
-}
-
-GUI hiển thị object này. Silent Mode chuyển ExitCode thành process exit code.
-
-5. Cấu trúc source nên hướng tới
-winlogcollector/
-├── src/
-│   └── WinLogCollector/
-│       ├── WinLogCollector.psd1
-│       ├── WinLogCollector.psm1
-│       ├── Public/
-│       │   ├── Invoke-WinLogCollectorCycle.ps1
-│       │   ├── Test-WinLogCollectorConfiguration.ps1
-│       │   ├── Test-WinLogCollectorPrerequisite.ps1
-│       │   └── Get-WinLogCollectorStatus.ps1
-│       └── Private/
-│           ├── Get-WinEventBatch.ps1
-│           ├── ConvertFrom-WinEventRecord.ps1
-│           ├── Read-CollectorState.ps1
-│           ├── Write-CollectorState.ps1
-│           ├── New-WinLogArchive.ps1
-│           ├── Send-WinLogArchive.ps1
-│           ├── Retry-WinLogQueue.ps1
-│           └── Write-CollectorLog.ps1
-├── apps/
-│   └── Gui/
-│       └── MainWindow.ps1
-├── scripts/
-│   ├── Install-WinLogCollector.ps1
-│   ├── Register-WinLogCollectorTask.ps1
-│   └── Uninstall-WinLogCollector.ps1
-├── config/
-│   ├── config.example.json
-│   └── config.schema.json
-├── tests/
-│   ├── Unit/
-│   ├── Integration/
-│   └── Fixtures/
-├── docs/
-├── Main.ps1
-└── README.md
-6. Bộ test tối thiểu cần có
-Collector
-Thu thập theo Record ID, không mất event khi > BatchSize
-Không giới hạn bởi time window sau khi có checkpoint
-Hai event cùng timestamp vẫn được thu thập
-Channel lỗi được trả về FailedChannels
-Checkpoint không cập nhật khi file ready chưa hoàn tất
-Recovery
-Crash sau .ready → lần sau vẫn archive
-Crash sau .zip → lần sau vẫn upload
-.tmp cũ → quarantine hoặc recover
-State JSON hỏng → không ghi đè state mới âm thầm
+Không mất batch
+Không bỏ quên file
+Duplicate có thể nhận biết bằng Batch ID
 Queue
-Upload lỗi → queue
-Retry thành công → xóa ZIP và sidecar
-Sidecar lỗi → quarantine
-Quá MaxAttempts → quarantine
-Quá MaxAgeDays → áp dụng retention
-Queue vượt giới hạn → trạng thái Degraded/Full
-SFTP
-Host key đúng → kết nối
-Host key sai → từ chối
-Remote folder thiếu → lỗi rõ ràng
-Upload .part thành công → rename
-Upload gián đoạn → không xuất hiện final file
-GUI
-Load config schema mới
-Không gọi function legacy
-Không block UI thread
-Stop có cancellation token
-Hiển thị đúng trạng thái queue/failed channel
-7. Thứ tự sửa đề xuất cho phiên bản 0.3.1
-Bước 1 – Khôi phục khả năng chạy
-Sửa signature Show-MainWindow.
-Xóa toàn bộ field config cũ trong GUI.
-Xóa lời gọi GUILOGSSH và GUILOGCHOGUI.
-Loại WinForms type khỏi Core.
-Xóa hoặc viết lại Security.ps1.
-Bước 2 – Chống mất dữ liệu
-Query theo EventRecordID, oldest-first.
-Phân trang thay vì lấy 50.000 event mới nhất.
-Bỏ time filter sau khi đã có checkpoint.
-Drain toàn bộ Ready/ ở đầu và cuối chu kỳ.
-Thêm named mutex.
-Trả lỗi nếu channel bắt buộc không đọc được.
-Bước 3 – Hoàn thiện queue và vận hành
-Thực thi thật MaxSizeMB, MaxAgeDays, MaxAttempts.
-Sidecar ghi atomic.
-Xử lý sidecar hỏng.
-Dùng một Batch ID xuyên suốt.
-Chuẩn hóa manifest.
-Thêm ACL installer.
-Bước 4 – Test và tài liệu
-Viết Pester tests thật.
-CI fail nếu không có test.
-Thêm config schema.
-Viết lại README theo code mới.
-Thêm deployment, recovery và troubleshooting documentation.
-8. Điểm đánh giá phiên bản hiện tại
-Hạng mục	Điểm	Nhận xét
-Ý tưởng và phạm vi	8/10	Bài toán rõ, đủ tốt cho portfolio security/data
-Kiến trúc Core	6.5/10	Đã có checkpoint, queue, archive, SFTP
-Độ đúng dữ liệu	5/10	Vẫn có đường mất log do MaxEvents, time window và recovery
-Bảo mật	6/10	Host-key verification tốt hơn, nhưng ACL/preflight chưa hoàn chỉnh
-GUI	3/10	Không đồng bộ với API và schema mới
-Testing	3.5/10	Có CI nhưng chưa có test bảo vệ các invariant quan trọng
-Tài liệu	4/10	README hiện mâu thuẫn với code mới
-Khả năng production	4.5/10	Chưa có at-least-once bảo đảm và health reporting tin cậy
-Đánh giá tổng thể: 5.8/10
+Queue vượt MaxSizeMB
+File quá MaxAgeDays
+Sidecar hỏng
+Quá MaxAttempts
+SFTP offline rồi online lại
+Remote file đã tồn tại
+6. README hiện vẫn mô tả phiên bản cũ
 
-Đây không còn là phiên bản sơ khai như trước; phần Core đã tiến bộ đáng kể. Tuy nhiên, ưu tiên hiện tại không nên là thêm Elasticsearch, dashboard hay nhiều Event ID hơn. Việc cần làm trước là hợp nhất luồng GUI/Silent, sửa query theo Record ID, bổ sung durable-outbox recovery và viết test chứng minh không mất/trùng log.
+README còn hướng dẫn:
+
+FolderLuuLog.
+EventChannels.
+HiddenLogs.
+Ping kiểm tra SFTP.
+StrictHostKeyChecking=no.
+ExecutionPolicy Bypass.
+Clone URL chứa <username>.
+Limited Mode chọn chính xác khoảng A–B, trong khi GUI hiện chỉ có “Thu thập ngay”.
+
+Những mô tả này mâu thuẫn trực tiếp với config và code hiện tại. Đặc biệt README vẫn giới thiệu StrictHostKeyChecking=no, trong khi uploader mới đã chuyển sang yes.
+
+README cần viết lại hoàn toàn cho v0.3.1, không nên tiếp tục vá vài dòng trên tài liệu cũ.
+
+7. Cấu trúc repo vẫn còn source cũ ở root
+
+Mặc dù đã có thư mục archive, file monolithic:
+
+CT491_B2203708_PhanThanhBinh.ps1
+
+vẫn nằm ngay root cạnh Main.ps1. Điều này tiếp tục tạo hai ứng viên “entry point” và có thể làm người review hoặc người dùng chạy nhầm phiên bản.
+
+Nên:
+
+archive/legacy/CT491_B2203708_PhanThanhBinh.ps1
+
+và root chỉ còn một entry point:
+
+Main.ps1
+8. Thứ tự sửa hợp lý tiếp theo
+Nhóm 1 — Chống lỗi chạy và mất dữ liệu
+Viết Test-WinLogCollectorPrerequisite.
+Thêm -Oldest cho lần chạy đầu.
+Drain cả *.ready và *.zip.
+Xóa toàn bộ catch {} trong đường dữ liệu.
+Dispose từng EventRecord.
+Dừng collection khi queue đầy.
+Dùng kết quả retry để tính health và exit code.
+Nhóm 2 — Hoàn thiện transaction pipeline
+Một Batch ID xuyên suốt.
+Rotate file theo count/size.
+Detect Event Log clear/rollover.
+State corruption recovery.
+MaxAgeDays và corrupt-sidecar policy.
+SFTP idempotency.
+Accurate manifest.
+Nhóm 3 — Vận hành và chất lượng dự án
+Tách GUI khỏi UI thread.
+Xóa Security.ps1 legacy.
+Config JSON Schema.
+Pester unit và integration tests.
+CI fail khi không có test.
+Viết lại README.
+Chuyển script monolithic khỏi root.

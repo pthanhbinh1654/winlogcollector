@@ -1,0 +1,113 @@
+{
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "title": "WinLogCollectorConfig",
+    "type": "object",
+    "required": [
+        "Remote",
+        "Local",
+        "Collection",
+        "Queue"
+    ],
+    "properties": {
+        "Remote": {
+            "type": "object",
+            "required": [
+                "Host",
+                "Port",
+                "User",
+                "SSHKeyPath",
+                "KnownHostsPath",
+                "RemotePath"
+            ],
+            "properties": {
+                "Host": {
+                    "type": "string",
+                    "minLength": 1
+                },
+                "Port": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 65535
+                },
+                "User": {
+                    "type": "string",
+                    "minLength": 1
+                },
+                "SSHKeyPath": {
+                    "type": "string"
+                },
+                "KnownHostsPath": {
+                    "type": "string"
+                },
+                "RemotePath": {
+                    "type": "string"
+                }
+            }
+        },
+        "Local": {
+            "type": "object",
+            "required": [
+                "DataDir"
+            ],
+            "properties": {
+                "DataDir": {
+                    "type": "string"
+                }
+            }
+        },
+        "Collection": {
+            "type": "object",
+            "required": [
+                "Subscriptions"
+            ],
+            "properties": {
+                "DefaultIntervalMinutes": {
+                    "type": "integer",
+                    "minimum": 1
+                },
+                "DefaultDurationMinutes": {
+                    "type": "integer",
+                    "minimum": 1
+                },
+                "Subscriptions": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "required": [
+                            "Channel"
+                        ],
+                        "properties": {
+                            "Channel": {
+                                "type": "string",
+                                "minLength": 1
+                            },
+                            "EventIDs": {
+                                "type": "array",
+                                "items": {
+                                    "type": "integer"
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "Queue": {
+            "type": "object",
+            "properties": {
+                "MaxSizeMB": {
+                    "type": "integer",
+                    "minimum": 1
+                },
+                "MaxAttempts": {
+                    "type": "integer",
+                    "minimum": 1
+                },
+                "MaxAgeDays": {
+                    "type": "integer",
+                    "minimum": 1
+                }
+            }
+        }
+    }
+}

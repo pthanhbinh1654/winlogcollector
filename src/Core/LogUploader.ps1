@@ -1,7 +1,8 @@
 # =====================================================
 # LogUploader.ps1 - Core: Archive, Queue & SFTP Upload
 # Fix P0.5: Zero WinForms dependency in parameters
-# Fix P0.12: Queue policy enforcement (MaxSizeMB, MaxAttempts, Quarantine)
+# Fix P0.6: Return QueueFull status when size >= MaxSizeMB
+# Fix P0.8: MaxAgeDays retention (quarantine expired archives)
 # =====================================================
 
 function New-WinLogArchive {
@@ -151,25 +152,27 @@ function Retry-WinLogQueue {
         [int]$Port = 22,
         [string]$Mode = "continuous",
         [int]$MaxSizeMB = 2048,
-        [int]$MaxAttempts = 20
+        [int]$MaxAttempts = 20,
+        [int]$MaxAgeDays = 14
     )
 
-    if (-not (Test-Path $QueueDir)) { return @{ Success = $true; Sent = 0; Failed = 0 } }
-
-    $queueSizeMB = [math]::Round((Get-ChildItem $QueueDir -Filter *.zip -ErrorAction SilentlyContinue | Measure-Object Length -Sum).Sum / 1MB, 2)
-    if ($queueSizeMB -gt $MaxSizeMB) {
-        AddLog "Queue dat $queueSizeMB MB (gioi han $MaxSizeMB MB). Dinh hoa quy trinh thu thap moi." "WARNING"
-    }
+    if (-not (Test-Path $QueueDir)) { return @{ Success = $true; QueueFull = $false; Sent = 0; Failed = 0 } }
 
     $zips = Get-ChildItem $QueueDir -Filter "*.zip" -ErrorAction SilentlyContinue
-    if (-not $zips) { return @{ Success = $true; Sent = 0; Failed = 0 } }
+    if (-not $zips) { return @{ Success = $true; QueueFull = $false; Sent = 0; Failed = 0 } }
+
+    $queueSizeMB = [math]::Round(($zips | Measure-Object Length -Sum).Sum / 1MB, 2)
+    $isQueueFull = ($queueSizeMB -ge $MaxSizeMB)
+    if ($isQueueFull) {
+        AddLog "⚠ Queue dat $queueSizeMB MB (gioi han $MaxSizeMB MB). Queue da day!" "WARNING"
+    }
 
     AddLog "Queue co $($zips.Count) file can gui lai..." "INFO"
     $sent = 0; $failed = 0
 
     if (-not (Test-SftpConnectivity -RemoteHost $RemoteHost -Port $Port)) {
         AddLog "Khong ket noi duoc TCP port $Port. Bo qua retry." "WARNING"
-        return @{ Success = $false; Sent = 0; Failed = $zips.Count }
+        return @{ Success = $false; QueueFull = $isQueueFull; Sent = 0; Failed = $zips.Count }
     }
 
     foreach ($zip in $zips) {
@@ -179,6 +182,22 @@ function Retry-WinLogQueue {
         }
         else { $null }
 
+        # Fix P0.8: Kiem tra MaxAgeDays retention
+        if ($meta -and $meta.createdUtc) {
+            try {
+                $created = [DateTime]::Parse($meta.createdUtc)
+                if ([DateTime]::UtcNow -gt $created.AddDays($MaxAgeDays)) {
+                    AddLog "File $($zip.Name) da vuot qua MaxAgeDays ($MaxAgeDays ngay). Chuyen Quarantine." "WARNING"
+                    if (-not (Test-Path $QuarantineDir)) { New-Item $QuarantineDir -ItemType Directory -Force | Out-Null }
+                    Move-Item $zip.FullName $QuarantineDir -Force
+                    Move-Item $sidecarPath $QuarantineDir -Force -ErrorAction SilentlyContinue
+                    continue
+                }
+            }
+            catch {}
+        }
+
+        # Kiem tra nextAttemptUtc
         if ($meta -and $meta.nextAttemptUtc) {
             try {
                 $nextTime = [DateTime]::Parse($meta.nextAttemptUtc)
@@ -227,7 +246,7 @@ function Retry-WinLogQueue {
             $failed++
         }
     }
-    return @{ Success = ($failed -eq 0); Sent = $sent; Failed = $failed }
+    return @{ Success = ($failed -eq 0); QueueFull = $isQueueFull; Sent = $sent; Failed = $failed }
 }
 
 function KTKN {
@@ -236,7 +255,7 @@ function KTKN {
         [int]$Port = 22
     )
     $ok = Test-SftpConnectivity -RemoteHost $TenKN -Port $Port
-    $msg = if ($ok) { "✅ [$TenKN]:$Port co the ket noi." } else { "❌ [$TenKN]:$Port khong ket noi duoc." }
+    $msg = if ($ok) { "✅ [${TenKN}]:$Port co the ket noi." } else { "❌ [${TenKN}]:$Port khong ket noi duoc." }
     AddLog $msg (if ($ok) { "SUCCESS" } else { "WARNING" })
     return $ok
 }

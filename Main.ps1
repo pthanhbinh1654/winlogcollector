@@ -1,8 +1,9 @@
 # =====================================================
 # Main.ps1 - Single Entry Point & Orchestrator v0.3.1
-# Fix P0.10: Named Mutex (Global\WinLogCollector)
-# Fix P0.3: Single unified cycle function (Invoke-WinLogCollectorCycle)
-# Fix P0.1: Pass Context hashtable to GUI
+# Fix P0.3: Drain both *.ready AND *.zip in ReadyDir
+# Fix P0.6: Enforce QueueFull (stop new collection when queue full)
+# Fix P0.7: Use queue retry results in cycle health calculation
+# Fix P0.10: Global\WinLogCollector Named Mutex
 # =====================================================
 param(
     [string]$ConfigPath = "$PSScriptRoot\config.json",
@@ -115,17 +116,45 @@ function Invoke-WinLogCollectorCycle {
 
     AddLog "=== Bat dau chu ky LogCollector ===" "INFO"
 
-    # Step A: Drain Queue first
-    AddLog "1/4. Retry cac file trong Queue..." "INFO"
+    # Step A: Retry existing items in Queue first
+    AddLog "1/5. Retry cac file trong Queue..." "INFO"
     $retry1 = Retry-WinLogQueue `
         -QueueDir $Context.QueueDir -QuarantineDir $Context.QuarantineDir `
         -RemoteHost $cfg.Remote.Host -User $cfg.Remote.User `
         -RemoteBasePath $cfg.Remote.RemotePath -SSHKeyPath $cfg.Remote.SSHKeyPath `
         -KnownHostsPath $cfg.Remote.KnownHostsPath -Port $cfg.Remote.Port `
-        -Mode $Mode -MaxSizeMB $cfg.Queue.MaxSizeMB -MaxAttempts $cfg.Queue.MaxAttempts
+        -Mode $Mode -MaxSizeMB $cfg.Queue.MaxSizeMB -MaxAttempts $cfg.Queue.MaxAttempts `
+        -MaxAgeDays $cfg.Queue.MaxAgeDays
 
-    # Step B: Collect Events
-    AddLog "2/4. Thu thap cac Event Log moi..." "INFO"
+    # Fix P0.6: Enforce QueueFull (stop collection if queue size exceeds MaxSizeMB)
+    if ($retry1.QueueFull) {
+        AddLog "Queue da day ($($cfg.Queue.MaxSizeMB) MB). Tam dung thu thap moi de bao ve o dia." "ERROR"
+        return [pscustomobject]@{ Success = $false; ExitCode = 50; Collected = 0; QueueFull = $true }
+    }
+
+    # Step B: Drain existing *.zip files in ReadyDir (Fix P0.3 crash recovery)
+    $existingZips = Get-ChildItem $Context.ReadyDir -Filter "*.zip" -ErrorAction SilentlyContinue
+    if ($existingZips) {
+        AddLog "2/5. Phuc hoi va upload $($existingZips.Count) file .zip ton tai trong ReadyDir..." "WARNING"
+        foreach ($zipFile in $existingZips) {
+            $upResult = Send-WinLogArchive `
+                -ArchivePath $zipFile.FullName -RemoteHost $cfg.Remote.Host -User $cfg.Remote.User `
+                -RemoteBasePath $cfg.Remote.RemotePath -SSHKeyPath $cfg.Remote.SSHKeyPath `
+                -KnownHostsPath $cfg.Remote.KnownHostsPath -Port $cfg.Remote.Port -Mode $Mode
+            if ($upResult.Success) {
+                Remove-Item $zipFile.FullName -ErrorAction SilentlyContinue
+                AddLog "Upload phuc hoi thanh cong: $($zipFile.Name)" "SUCCESS"
+            }
+            else {
+                Move-WinLogArchiveToQueue -ArchivePath $zipFile.FullName -QueueDir $Context.QueueDir -LastError $upResult.Error
+                AddLog "Upload phuc hoi that bai, da luu vao Queue: $($zipFile.Name)" "WARNING"
+                $exitCode = [math]::Max($exitCode, 40)
+            }
+        }
+    }
+
+    # Step C: Collect Events
+    AddLog "3/5. Thu thap cac Event Log moi..." "INFO"
     $collectResult = $null
     try {
         $collectResult = Invoke-WinLogCollection `
@@ -140,13 +169,13 @@ function Invoke-WinLogCollectorCycle {
 
     if (-not $collectResult.Success) {
         AddLog "Co channel thu thap thất bại: $($collectResult.FailedChannels -join ', ')" "WARNING"
-        $exitCode = 20
+        $exitCode = [math]::Max($exitCode, 20)
     }
 
-    # Step C: Process & Upload Ready files (JSONL -> ZIP -> SFTP)
+    # Step D: Process & Upload Ready files (JSONL -> ZIP -> SFTP)
     $readyFiles = $collectResult.ReadyFiles
     if ($readyFiles -and $readyFiles.Count -gt 0) {
-        AddLog "3/4. Xuly va upload $($readyFiles.Count) file ready..." "INFO"
+        AddLog "4/5. Xuly va upload $($readyFiles.Count) file ready..." "INFO"
         foreach ($readyFile in $readyFiles) {
             if (-not (Test-Path $readyFile)) { continue }
             $archive = $null
@@ -178,25 +207,32 @@ function Invoke-WinLogCollectorCycle {
         }
     }
     else {
-        AddLog "3/4. Khong co file ready moi." "INFO"
+        AddLog "4/5. Khong co file ready moi." "INFO"
     }
 
-    # Step D: Final Queue Retry (catch anything queued in Step C)
-    AddLog "4/4. Drain Queue lan cuoi..." "INFO"
+    # Step E: Final Queue Retry (catch anything queued in Step D)
+    AddLog "5/5. Drain Queue lan cuoi..." "INFO"
     $retry2 = Retry-WinLogQueue `
         -QueueDir $Context.QueueDir -QuarantineDir $Context.QuarantineDir `
         -RemoteHost $cfg.Remote.Host -User $cfg.Remote.User `
         -RemoteBasePath $cfg.Remote.RemotePath -SSHKeyPath $cfg.Remote.SSHKeyPath `
         -KnownHostsPath $cfg.Remote.KnownHostsPath -Port $cfg.Remote.Port `
-        -Mode $Mode -MaxSizeMB $cfg.Queue.MaxSizeMB -MaxAttempts $cfg.Queue.MaxAttempts
+        -Mode $Mode -MaxSizeMB $cfg.Queue.MaxSizeMB -MaxAttempts $cfg.Queue.MaxAttempts `
+        -MaxAgeDays $cfg.Queue.MaxAgeDays
+
+    # Fix P0.7: Use queue retry results in exit code calculation
+    if (-not $retry2.Success -and $retry2.Failed -gt 0 -and $exitCode -eq 0) {
+        $exitCode = 40  # Exit code 40 = Items remain in queue
+    }
 
     AddLog "=== Hoan thanh chu ky. ExitCode: $exitCode ===" "INFO"
 
     return [pscustomobject]@{
-        Success    = ($exitCode -eq 0)
-        ExitCode   = $exitCode
-        Collected  = $collectResult.RecordCount
-        ReadyFiles = $readyFiles.Count
+        Success     = ($exitCode -eq 0)
+        ExitCode    = $exitCode
+        Collected   = $collectResult.RecordCount
+        ReadyFiles  = $readyFiles.Count
+        QueueFailed = $retry2.Failed
     }
 }
 
@@ -211,7 +247,7 @@ try {
         Add-Type -AssemblyName System.Windows.Forms
         Add-Type -AssemblyName System.Drawing
         . (Join-Path $SrcBase "Gui\MainWindow.ps1")
-        # Pass Context hashtable to GUI (Fix P0.1)
+        # Pass Context hashtable to GUI
         Show-MainWindow -Context $Context
     }
 }
