@@ -136,7 +136,20 @@ Invoke-Pester -Path ".\tests\Unit\Collector.Tests.ps1"
 
 ---
 
-## 🔒 Tính năng Bảo mật & Độ tin cậy (Security & Invariants)
+## �️ Giao diện Quản trị WinForms (6 Tab)
+
+| Tab | Chức năng | Chi tiết |
+|---|---|---|
+| **1. 📊 Tổng quan** | KPI Stat Cards & Điều khiển nhanh | Xem tổng số Event đã lấy, dung lượng Queue, trạng thái SFTP; nút Thu thập ngay, Bắt đầu/Dừng tự động, Preflight. |
+| **2. 📥 Thu thập log** | Quản lý Subscriptions & Mode | Đổi giữa Checkpoint (incremental) và Lookback (phút); DataGridView chỉnh sửa trực tiếp danh sách Event Log Channels & Event IDs. |
+| **3. ⚡ Tự động (Timer)** | Lịch chạy định kỳ Continuous Mode | Chỉnh chu kỳ Timer (phút), đếm ngược thời gian lần chạy kế tiếp, tự động retry queue đệm offline. |
+| **4. 🌐 Cấu hình SFTP** | Cấu hình & Thử nghiệm kết nối | Thay đổi Host, Port, Username, RemotePath, SSH Key, KnownHosts; thử cổng TCP 22 & lưu cấu hình trực tiếp vào `config.json`. |
+| **5. 📦 Hàng chờ Queue** | Quản lý đệm Offline & Quarantine | DataGridView danh sách file `.zip` đang chờ retry (Dung lượng, Số lần thử, Lần thử kế tiếp); nút Retry ngay & Mở thư mục. |
+| **6. 🔍 Preflight Check** | Bảng kiểm tra tiền điều kiện | DataGridView kiểm tra 8 tiêu chí hệ thống (Admin, sftp.exe, SSH Key, KnownHosts, Event Channels, Cổng TCP 22). |
+
+---
+
+## �🔒 Tính năng Bảo mật & Độ tin cậy (Security & Invariants)
 
 1. **Strict Host Key Verification**: Ép buộc kiểm tra fingerprint máy chủ qua file `known_hosts` (ngăn ngừa Man-in-the-Middle).
 2. **Atomic Operations**: Ghi file tạm (`.tmp`) rồi đổi tên sang `.ready`/`.queue.json` để tránh race-conditions.
