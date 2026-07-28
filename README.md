@@ -1,36 +1,42 @@
 # WinLogCollector 🪟📋
 
-> **He thong thu thap, nen va gui Windows Event Log qua SFTP** – Đồ án CT491
+> **Enterprise-grade Windows Log Collector Agent (v0.3.1)** – Đồ án CT491 - Niên Luận Cơ Sở
 
 [![PowerShell](https://img.shields.io/badge/PowerShell-5.1%2B-blue?logo=powershell)](https://docs.microsoft.com/en-us/powershell/)
 [![Platform](https://img.shields.io/badge/Platform-Windows-lightgrey?logo=windows)](https://www.microsoft.com/windows)
+[![Pester](https://img.shields.io/badge/Tests-Pester-green?logo=powershell)](tests/Unit/Collector.Tests.ps1)
 [![License](https://img.shields.io/badge/License-MIT-green)](LICENSE)
 
 ---
 
 ## 📌 Giới thiệu
 
-**WinLogCollector** là một công cụ PowerShell dạng GUI cho phép quản trị viên:
-- Thu thập Windows Event Log theo **khoảng thời gian** hoặc **liên tục theo chu kỳ**
-- **Nén log** thành `.zip` trước khi gửi để tiết kiệm băng thông (~70%)
-- **Gửi log tự động** lên máy chủ SFTP từ xa qua SSH Key
-- **Lưu đệm offline** khi mất kết nối và **tự gửi lại** khi mạng phục hồi
+**WinLogCollector** là một Windows Event Log Collector agent chuyên nghiệp, tin cậy và đạt chuẩn bảo mật, được thiết kế để:
+- Thu thập Windows Event Logs theo **oldest-first paginated XPath query** dựa trên checkpoint `RecordID` (đảm bảo không trùng, không mất dữ liệu).
+- Tách biệt cấu hình theo mảng **Subscriptions** cho từng Event Log Channel riêng biệt.
+- **Tự động khôi phục sau crash (Durable Outbox)**: Xử lý cả file `.ready` và `.zip` còn tồn tại ở đầu mỗi chu kỳ.
+- **Nén log & bảo mật truyền tải**: Nén ZIP và gửi lên máy chủ SFTP qua SSH Key với **`StrictHostKeyChecking=yes`** & host key verification.
+- **Hàng chờ offline (Queue with Exponential Backoff & Quarantine)**: Giới hạn dung lượng Queue (`MaxSizeMB`), giới hạn số lần thử (`MaxAttempts`) và tự động đưa file quá hạn (`MaxAgeDays`) vào `Quarantine`.
+- **Đã loại bỏ hoàn toànWinForms khỏi Core**: Core chạy headless 100%, GUI & Silent mode gọi chung một hàm duy nhất `Invoke-WinLogCollectorCycle`.
 
 ---
 
 ## 🏗️ Kiến trúc hệ thống
 
 ```mermaid
-flowchart LR
-    A[Windows Client\nWinLogCollector] -->|Get-WinEvent| B[(Event Log\nApplication/Security\nSystem/Setup)]
-    B -->|JSON| C[HiddenLogs/]
-    C -->|Compress-Archive| D[.zip]
-    D -->|SFTP + SSH Key| E[Remote Server\nSFTP]
-    E --> F[(SIEM / ELK Stack\nLog Analysis)]
+flowchart TD
+    A[Windows Event Logs\nSecurity / System / Operational] -->|XPath EventRecordID > LastId| B[LogCollector]
+    B -->|Atomic JSONL| C[Ready/*.jsonl.ready]
+    C -->|Compress-Archive| D[Ready/*.zip]
+    D -->|SFTP + Strict HostKey Check| E[Remote SFTP Server]
+    D -.->|Failed Upload| F[Queue/*.zip + Sidecar JSON]
+    F -->|Exponential Backoff Retry| E
+    F -.->|Expired / Exceeded MaxAttempts| G[Quarantine/]
 
     style A fill:#0078D4,color:#fff
+    style B fill:#1565c0,color:#fff
     style E fill:#2e7d32,color:#fff
-    style F fill:#1565c0,color:#fff
+    style G fill:#d32f2f,color:#fff
 ```
 
 ---
@@ -39,118 +45,110 @@ flowchart LR
 
 ```
 WinLogCollector/
-├── Main.ps1                    # Điểm khởi chạy chính
-├── config.json                 # File cấu hình (IP, SSH key, paths...)
+├── Main.ps1                    # Orchestrator & Single Entry Point
+├── config.json                 # File cấu hình JSON (Host, Keys, Subscriptions...)
 ├── README.md
-├── .gitignore
-└── src/
-    ├── Core/
-    │   ├── LogCollector.ps1    # Thu thập & parse Event Log -> JSON
-    │   └── LogUploader.ps1     # Nén zip + Upload SFTP + Retry queue
-    ├── Gui/
-    │   └── MainWindow.ps1      # Windows Forms GUI
-    └── Utils/
-        ├── Logger.ps1          # Logging ra GUI console + stdout
-        └── Security.ps1        # Kiểm tra quyền Admin, ping test
+├── LICENSE
+├── config/
+│   └── config.schema.json      # JSON Schema validation
+├── src/
+│   ├── Core/
+│   │   ├── LogCollector.ps1    # Incremental oldest-first Event Log collector
+│   │   └── LogUploader.ps1     # Compression, SFTP upload & Queue management
+│   ├── Gui/
+│   │   └── MainWindow.ps1      # WinForms UI (nhận Context hashtable)
+│   └── Utils/
+│       ├── Logger.ps1          # Thread-safe persistent JSON logger & UI callback sink
+│       └── Security.ps1        # Admin check & Preflight check (Test-WinLogCollectorPrerequisite)
+├── tests/
+│   └── Unit/
+│       └── Collector.Tests.ps1 # Pester Unit Tests suite
+└── archive/                    # Mã nguồn cũ lưu trữ
 ```
 
 ---
 
-## ⚙️ Yêu cầu hệ thống
+## ⚙️ Cấu hình `config.json` (v0.3.1 Schema)
 
-| Yêu cầu | Chi tiết |
-|---|---|
-| OS | Windows 10/11 hoặc Windows Server 2016+ |
-| PowerShell | 5.1 trở lên (có sẵn trên Windows) |
-| Quyền | **Administrator** (bắt buộc để đọc Security Event Log) |
-| OpenSSH | Cài đặt SFTP client (`sftp.exe`) – có sẵn từ Windows 10 1809+ |
-| SSH Key | RSA private key để xác thực với SFTP server |
-
----
-
-## 🚀 Hướng dẫn cài đặt & sử dụng
-
-### 1. Clone repo
-```powershell
-git clone https://github.com/<username>/WinLogCollector.git
-cd WinLogCollector
-```
-
-### 2. Cấu hình `config.json`
 ```json
 {
   "Remote": {
-    "Host": "192.168.1.2",
-    "User": "sftp",
-    "SSHKeyPath": "C:\\Users\\YourName\\.ssh\\sftp_id_rsa",
-    "RemotePath": "/home/sftp/uploads"
+    "Host": "192.168.1.100",
+    "Port": 22,
+    "User": "sftpuser",
+    "SSHKeyPath": "C:\\ProgramData\\WinLogCollector\\keys\\id_rsa",
+    "KnownHostsPath": "C:\\ProgramData\\WinLogCollector\\keys\\known_hosts",
+    "RemotePath": "/var/log/collectors"
   },
   "Local": {
-    "FolderLuuLog": "C:\\"
+    "DataDir": "C:\\ProgramData\\WinLogCollector"
   },
   "Collection": {
-    "EventChannels": ["Application", "Security", "System", "Setup"],
     "DefaultIntervalMinutes": 3,
-    "DefaultDurationMinutes": 9
+    "DefaultDurationMinutes": 9,
+    "Subscriptions": [
+      {
+        "Channel": "Security",
+        "EventIDs": [4624, 4625, 4688]
+      },
+      {
+        "Channel": "System",
+        "EventIDs": []
+      },
+      {
+        "Channel": "Microsoft-Windows-PowerShell/Operational",
+        "EventIDs": [4103, 4104]
+      }
+    ]
+  },
+  "Queue": {
+    "MaxSizeMB": 2048,
+    "MaxAttempts": 20,
+    "MaxAgeDays": 14
   }
 }
 ```
 
-### 3. Chạy với GUI (mặc định)
+---
+
+## 🚀 Hướng dẫn chạy & Kiểm thử
+
+### 1. Clone Repo & Cài đặt
 ```powershell
-# Nhấp chuột phải -> "Run with PowerShell" hoặc:
+git clone https://github.com/pthanhbinh1654/winlogcollector.git
+cd winlogcollector
+```
+
+### 2. Chạy Giao diện GUI (Default Mode)
+```powershell
 powershell -ExecutionPolicy Bypass -File ".\Main.ps1"
 ```
 
-### 4. Chạy không cần GUI (Silent mode – dùng cho Task Scheduler)
+### 3. Chạy Chế độ Silent (Headless Mode - Dùng cho Windows Task Scheduler)
 ```powershell
 powershell -ExecutionPolicy Bypass -File ".\Main.ps1" -Silent
 ```
 
-### 5. Cài đặt chạy tự động với Windows Task Scheduler
+### 4. Chạy Unit Tests (Pester)
 ```powershell
-$action  = New-ScheduledTaskAction -Execute "powershell.exe" -Argument "-ExecutionPolicy Bypass -File `"C:\WinLogCollector\Main.ps1`" -Silent"
-$trigger = New-ScheduledTaskTrigger -RepetitionInterval (New-TimeSpan -Minutes 3) -Once -At (Get-Date)
-Register-ScheduledTask -TaskName "WinLogCollector" -Action $action -Trigger $trigger -RunLevel Highest -Force
+Invoke-Pester -Path ".\tests\Unit\Collector.Tests.ps1"
 ```
 
 ---
 
-## 🖥️ Giao diện ứng dụng
+## 🔒 Tính năng Bảo mật & Độ tin cậy (Security & Invariants)
 
-| Chức năng | Mô tả |
-|---|---|
-| **Limited Mode** | Thu thập log trong 1 khoảng thời gian cụ thể từ A đến B |
-| **Continuous Mode** | Thu thập log định kỳ mỗi N phút, có thể dừng bất cứ lúc nào |
-| **Kiem tra ket noi** | Ping kiểm tra kết nối SFTP server trước khi gửi |
-| **Console Output** | Hiển thị log tiến trình realtime có mã màu |
-| **Offline Buffer** | Tự lưu file zip khi mất kết nối, gửi lại khi online |
-
----
-
-## 🔒 Bảo mật
-
-- Sử dụng **SSH Key Authentication** (không dùng mật khẩu)
-- File log được lưu trong **thư mục ẩn** (`HiddenLogs/`)
-- Tùy chọn SFTP `-o StrictHostKeyChecking=no -o BatchMode=yes` đảm bảo chạy không tương tác
-- SSH key **không được commit** vào repo (xem `.gitignore`)
-
----
-
-## 📊 Các Event ID được hỗ trợ
-
-| Event ID | Ý nghĩa | Trường bổ sung |
-|---|---|---|
-| **4624** | Đăng nhập thành công | AccountName, LogonType |
-| **4688** | Tạo tiến trình mới | ProcessName, CommandLine |
-| **4104** | PowerShell Script Block | ScriptBlockText |
+1. **Strict Host Key Verification**: Ép buộc kiểm tra fingerprint máy chủ qua file `known_hosts` (ngăn ngừa Man-in-the-Middle).
+2. **Atomic Operations**: Ghi file tạm (`.tmp`) rồi đổi tên sang `.ready`/`.queue.json` để tránh race-conditions.
+3. **Single Instance Mutex**: Sử dụng `Global\WinLogCollector` Named Mutex ngăn chạy nhiều tiến trình cùng lúc.
+4. **Oldest-First RecordID Pagination**: Query log theo thứ tự từ cũ tới mới dựa trên EventRecordID, đảm bảo thu thập đầy đủ sau khi máy tắt hoặc gián đoạn.
+5. **Disk Protection**: Tự động ngừng thu thập khi Queue vượt quá ngưỡng `MaxSizeMB` cấu hình.
 
 ---
 
 ## 📝 License
 
-MIT License – Xem file [LICENSE](LICENSE) để biết thêm chi tiết.
+Dự án phát hành theo mã nguồn mở **MIT License**. Xem chi tiết tại [LICENSE](LICENSE).
 
 ---
-
-*Đồ án CT491 – Niên Luận Cơ Sở | B2203708 – Phan Thanh Bình*
+*Đồ án CT491 – Niên Luận Cơ Sở \| B2203708 – Phan Thanh Bình*
