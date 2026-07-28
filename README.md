@@ -1,6 +1,8 @@
 # WinLogCollector 🪟📋
 
-> **Enterprise-grade Windows Log Collector Agent (v0.3.1)** – Đồ án CT491 - Niên Luận Cơ Sở
+> **Enterprise-grade Windows Log Collector Agent (v0.3.1)** – Academic Project CT491 - Core Computer Science Project
+
+[🇬🇧 English Version](README.md) | [🇻🇳 Tiếng Việt](README_VN.md)
 
 [![PowerShell](https://img.shields.io/badge/PowerShell-5.1%2B-blue?logo=powershell)](https://docs.microsoft.com/en-us/powershell/)
 [![Platform](https://img.shields.io/badge/Platform-Windows-lightgrey?logo=windows)](https://www.microsoft.com/windows)
@@ -9,27 +11,27 @@
 
 ---
 
-## 📌 Giới thiệu
+## 📌 Overview
 
-**WinLogCollector** là một Windows Event Log Collector agent chuyên nghiệp, tin cậy và đạt chuẩn bảo mật, được thiết kế để:
-- Thu thập Windows Event Logs theo **oldest-first paginated XPath query** dựa trên checkpoint `RecordID` (đảm bảo không trùng, không mất dữ liệu).
-- Tách biệt cấu hình theo mảng **Subscriptions** cho từng Event Log Channel riêng biệt.
-- **Tự động khôi phục sau crash (Durable Outbox)**: Xử lý cả file `.ready` và `.zip` còn tồn tại ở đầu mỗi chu kỳ.
-- **Nén log & bảo mật truyền tải**: Nén ZIP và gửi lên máy chủ SFTP qua SSH Key với **`StrictHostKeyChecking=yes`** & host key verification.
-- **Hàng chờ offline (Queue with Exponential Backoff & Quarantine)**: Giới hạn dung lượng Queue (`MaxSizeMB`), giới hạn số lần thử (`MaxAttempts`) và tự động đưa file quá hạn (`MaxAgeDays`) vào `Quarantine`.
-- **Đã loại bỏ hoàn toànWinForms khỏi Core**: Core chạy headless 100%, GUI & Silent mode gọi chung một hàm duy nhất `Invoke-WinLogCollectorCycle`.
+**WinLogCollector** is a professional, reliable, and security-hardened Windows Event Log Collector agent designed for enterprise environments:
+- **Incremental Collection**: Collects Windows Event Logs using **oldest-first paginated XPath queries** anchored on `RecordID` checkpoints (guaranteeing zero duplicate records and zero data loss).
+- **Per-Channel Subscriptions**: Decouples event filtering into per-channel configuration arrays (`Subscriptions`).
+- **Durable Outbox Crash Recovery**: Drains and recovers all pending `.ready` and `.zip` files at the beginning of every collection cycle.
+- **Secure Compression & Upload**: Compresses logs into ZIP archives and uploads via OpenSSH SFTP with mandatory **`StrictHostKeyChecking=yes`** & host key verification.
+- **Offline Resilient Queue**: Features exponential backoff retries, queue disk safety limits (`MaxSizeMB`), attempt caps (`MaxAttempts`), and automatic quarantining (`MaxAgeDays`).
+- **Headless Core Architecture**: Core engine is 100% headless with zero WinForms dependency. Both GUI and Silent modes execute through a single unified entry point `Invoke-WinLogCollectorCycle`.
 
 ---
 
-## 🏗️ Kiến trúc hệ thống
+## 🏗️ System Architecture
 
 ```mermaid
 flowchart TD
-    A[Windows Event Logs\nSecurity / System / Operational] -->|XPath EventRecordID > LastId| B[LogCollector]
-    B -->|Atomic JSONL| C[Ready/*.jsonl.ready]
+    A[Windows Event Logs\nSecurity / System / Operational] -->|XPath EventRecordID > LastId| B[LogCollector Engine]
+    B -->|Atomic Write JSONL| C[Ready/*.jsonl.ready]
     C -->|Compress-Archive| D[Ready/*.zip]
     D -->|SFTP + Strict HostKey Check| E[Remote SFTP Server]
-    D -.->|Failed Upload| F[Queue/*.zip + Sidecar JSON]
+    D -.->|Upload Failure| F[Queue/*.zip + Sidecar JSON]
     F -->|Exponential Backoff Retry| E
     F -.->|Expired / Exceeded MaxAttempts| G[Quarantine/]
 
@@ -41,14 +43,15 @@ flowchart TD
 
 ---
 
-## 📂 Cấu trúc dự án
+## 📂 Project Structure
 
 ```
 WinLogCollector/
 ├── Main.ps1                    # Orchestrator & Single Entry Point
-├── config.json                 # File cấu hình JSON (Host, Keys, Subscriptions...)
-├── README.md
-├── LICENSE
+├── config.json                 # JSON Configuration File (Host, Keys, Subscriptions...)
+├── README.md                   # Documentation (English)
+├── README_VN.md                # Documentation (Vietnamese)
+├── LICENSE                     # Open-source MIT License
 ├── config/
 │   └── config.schema.json      # JSON Schema validation
 ├── src/
@@ -56,19 +59,19 @@ WinLogCollector/
 │   │   ├── LogCollector.ps1    # Incremental oldest-first Event Log collector
 │   │   └── LogUploader.ps1     # Compression, SFTP upload & Queue management
 │   ├── Gui/
-│   │   └── MainWindow.ps1      # WinForms UI (nhận Context hashtable)
+│   │   └── MainWindow.ps1      # WinForms Management Console (receives Context hashtable)
 │   └── Utils/
 │       ├── Logger.ps1          # Thread-safe persistent JSON logger & UI callback sink
 │       └── Security.ps1        # Admin check & Preflight check (Test-WinLogCollectorPrerequisite)
 ├── tests/
 │   └── Unit/
 │       └── Collector.Tests.ps1 # Pester Unit Tests suite
-└── archive/                    # Mã nguồn cũ lưu trữ
+└── archive/                    # Archived legacy script iterations
 ```
 
 ---
 
-## ⚙️ Cấu hình `config.json` (v0.3.1 Schema)
+## ⚙️ Configuration `config.json` (v0.3.1 Schema)
 
 ```json
 {
@@ -111,57 +114,57 @@ WinLogCollector/
 
 ---
 
-## 🚀 Hướng dẫn chạy & Kiểm thử
+## �️ Interactive WinForms Management Console (6 Tabs)
 
-### 1. Clone Repo & Cài đặt
+| Tab | Name | Key Functionality |
+|---|---|---|
+| **1. 📊 Dashboard** | Overview & Quick Controls | Real-time KPI stat cards (Collected events, Queue size, SFTP status), Run Once, Continuous Timer Start/Stop, Preflight triggers. |
+| **2. 📥 Collection** | Channel Subscriptions | Toggle between Checkpoint (incremental) and Lookback modes; interactive DataGridView for live channel & Event ID editing. |
+| **3. ⚡ Automation** | Schedule & Continuous Timer | Configure interval cycle (minutes), live countdown timer display, and auto-retry offline queue buffer. |
+| **4. 🌐 SFTP Setup** | Connection & Test Tools | Configure Host, Port, Username, RemotePath, SSH Key, KnownHosts; test TCP port 22 and save directly to `config.json`. |
+| **5. 📦 Queue Buffer** | Offline Buffer & Quarantine | Interactive DataGridView listing queued `.zip` archives (Size, Attempts, Next Retry Time); manual Retry All Now & Open Folder actions. |
+| **6. 🔍 Preflight Check** | System Prerequisites Audit | Interactive DataGridView evaluating 8 system prerequisites (Admin rights, `sftp.exe`, SSH Key, `known_hosts`, Event Channels, TCP port 22). |
+
+---
+
+## � Getting Started & Execution
+
+### 1. Clone Repository & Setup
 ```powershell
 git clone https://github.com/pthanhbinh1654/winlogcollector.git
 cd winlogcollector
 ```
 
-### 2. Chạy Giao diện GUI (Default Mode)
+### 2. Launch GUI Management Console (Default Mode)
 ```powershell
 powershell -ExecutionPolicy Bypass -File ".\Main.ps1"
 ```
 
-### 3. Chạy Chế độ Silent (Headless Mode - Dùng cho Windows Task Scheduler)
+### 3. Run Silent Mode (Headless / Windows Task Scheduler)
 ```powershell
 powershell -ExecutionPolicy Bypass -File ".\Main.ps1" -Silent
 ```
 
-### 4. Chạy Unit Tests (Pester)
+### 4. Run Pester Unit Tests
 ```powershell
 Invoke-Pester -Path ".\tests\Unit\Collector.Tests.ps1"
 ```
 
 ---
 
-## �️ Giao diện Quản trị WinForms (6 Tab)
+## 🔒 Security Hardening & Data Guarantees
 
-| Tab | Chức năng | Chi tiết |
-|---|---|---|
-| **1. 📊 Tổng quan** | KPI Stat Cards & Điều khiển nhanh | Xem tổng số Event đã lấy, dung lượng Queue, trạng thái SFTP; nút Thu thập ngay, Bắt đầu/Dừng tự động, Preflight. |
-| **2. 📥 Thu thập log** | Quản lý Subscriptions & Mode | Đổi giữa Checkpoint (incremental) và Lookback (phút); DataGridView chỉnh sửa trực tiếp danh sách Event Log Channels & Event IDs. |
-| **3. ⚡ Tự động (Timer)** | Lịch chạy định kỳ Continuous Mode | Chỉnh chu kỳ Timer (phút), đếm ngược thời gian lần chạy kế tiếp, tự động retry queue đệm offline. |
-| **4. 🌐 Cấu hình SFTP** | Cấu hình & Thử nghiệm kết nối | Thay đổi Host, Port, Username, RemotePath, SSH Key, KnownHosts; thử cổng TCP 22 & lưu cấu hình trực tiếp vào `config.json`. |
-| **5. 📦 Hàng chờ Queue** | Quản lý đệm Offline & Quarantine | DataGridView danh sách file `.zip` đang chờ retry (Dung lượng, Số lần thử, Lần thử kế tiếp); nút Retry ngay & Mở thư mục. |
-| **6. 🔍 Preflight Check** | Bảng kiểm tra tiền điều kiện | DataGridView kiểm tra 8 tiêu chí hệ thống (Admin, sftp.exe, SSH Key, KnownHosts, Event Channels, Cổng TCP 22). |
-
----
-
-## �🔒 Tính năng Bảo mật & Độ tin cậy (Security & Invariants)
-
-1. **Strict Host Key Verification**: Ép buộc kiểm tra fingerprint máy chủ qua file `known_hosts` (ngăn ngừa Man-in-the-Middle).
-2. **Atomic Operations**: Ghi file tạm (`.tmp`) rồi đổi tên sang `.ready`/`.queue.json` để tránh race-conditions.
-3. **Single Instance Mutex**: Sử dụng `Global\WinLogCollector` Named Mutex ngăn chạy nhiều tiến trình cùng lúc.
-4. **Oldest-First RecordID Pagination**: Query log theo thứ tự từ cũ tới mới dựa trên EventRecordID, đảm bảo thu thập đầy đủ sau khi máy tắt hoặc gián đoạn.
-5. **Disk Protection**: Tự động ngừng thu thập khi Queue vượt quá ngưỡng `MaxSizeMB` cấu hình.
+1. **Strict Host Key Verification**: Enforces host fingerprint checking against `known_hosts` (mitigating Man-in-the-Middle risks).
+2. **Atomic Disk Operations**: Writes to temporary files (`.tmp`) before moving to final `.ready`/`.queue.json` destinations to prevent race conditions.
+3. **Single Instance Named Mutex**: Employs `Local\WinLogCollector` Named Mutex to prevent duplicate concurrent processes.
+4. **Oldest-First RecordID Pagination**: Queries event logs chronologically from oldest to newest using EventRecordID, ensuring continuous recovery after reboots or downtime.
+5. **Queue Disk Protection**: Freezes collection automatically when the offline queue reaches the `MaxSizeMB` threshold.
 
 ---
 
 ## 📝 License
 
-Dự án phát hành theo mã nguồn mở **MIT License**. Xem chi tiết tại [LICENSE](LICENSE).
+Distributed under the **MIT License**. See [LICENSE](LICENSE) for details.
 
 ---
-*Đồ án CT491 – Niên Luận Cơ Sở \| B2203708 – Phan Thanh Bình*
+*CT491 Academic Project \| B2203708 – Phan Thanh Bình*
