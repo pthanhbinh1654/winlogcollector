@@ -12,7 +12,7 @@ param(
 
 # ---- 1. Named Mutex (Prevent Concurrent Instances - P0.10) ----
 $createdNew = $false
-$mutex = [System.Threading.Mutex]::new($true, "Global\WinLogCollector", [ref]$createdNew)
+$mutex = [System.Threading.Mutex]::new($true, "Local\WinLogCollector", [ref]$createdNew)
 if (-not $createdNew) {
     Write-Host "⚠ Single instance enforced. Another instance of WinLogCollector is already running." -ForegroundColor Yellow
     exit 12   # Exit code 12 = Already Running
@@ -26,12 +26,13 @@ $IsAdmin = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIden
 if (-not $IsAdmin) {
     if ($Silent) {
         Write-Error 'Administrator privilege is required. Run this script as Administrator.'
-        $mutex.ReleaseMutex() | Out-Null
+        try { $mutex.ReleaseMutex() } catch {}
         exit 11   # Exit code 11 = Insufficient privileges
     }
-    $argStr = "-NoProfile -ExecutionPolicy RemoteSigned -File `"$ScriptPath`""
+    # Safely release mutex before launching elevated instance
+    try { $mutex.ReleaseMutex() } catch {}
+    $argStr = "-NoProfile -ExecutionPolicy Bypass -File `"$ScriptPath`""
     Start-Process powershell -Verb RunAs -ArgumentList $argStr
-    $mutex.ReleaseMutex() | Out-Null
     exit
 }
 
