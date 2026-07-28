@@ -7,7 +7,7 @@
 $global:LogFile = $null
 $global:LogSink = $null    # [scriptblock]{ param($msg, $level) ... }
 
-function Initialize-Logger {
+function global:Initialize-Logger {
     param(
         [string]$DataDir = "C:\ProgramData\WinLogCollector",
         [scriptblock]$Sink = $null
@@ -18,7 +18,7 @@ function Initialize-Logger {
     $global:LogSink = $Sink
 }
 
-function AddLog {
+function global:AddLog {
     param(
         [string]$Message,
         [string]$Type = "INFO",

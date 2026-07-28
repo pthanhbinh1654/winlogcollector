@@ -6,7 +6,7 @@
 # Fix P0.8: Drain Ready/ .ready files at top of cycle
 # =====================================================
 
-function Read-CollectorState {
+function global:Read-CollectorState {
     param([string]$StateFile)
     if (Test-Path $StateFile) {
         try { return Get-Content $StateFile -Raw | ConvertFrom-Json } catch {}
@@ -14,7 +14,7 @@ function Read-CollectorState {
     return [pscustomobject]@{}
 }
 
-function Write-CollectorState {
+function global:Write-CollectorState {
     param([string]$StateFile, [hashtable]$State)
     $tmp = "$StateFile.tmp"
     $State | ConvertTo-Json | Set-Content $tmp -Encoding UTF8 -Force
@@ -22,7 +22,7 @@ function Write-CollectorState {
 }
 
 # ---- XML parser: doc theo ten truong, khong dung index ----
-function ConvertFrom-WinEventRecord {
+function global:ConvertFrom-WinEventRecord {
     param(
         [Parameter(Mandatory, ValueFromPipeline)]
         [System.Diagnostics.Eventing.Reader.EventRecord]$EventRecord
@@ -70,7 +70,7 @@ function ConvertFrom-WinEventRecord {
 }
 
 # ---- Query page theo XPath RecordID (oldest-first) ----
-function Get-WinEventBatch {
+function global:Get-WinEventBatch {
     param(
         [string]$Channel,
         [long]$AfterRecordId = 0,
@@ -126,7 +126,7 @@ function Get-WinEventBatch {
 }
 
 # ---- Ham thu thap chinh ----
-function Invoke-WinLogCollection {
+function global:Invoke-WinLogCollection {
     param(
         [Parameter(Mandatory)][array]$Subscriptions,
         [Parameter(Mandatory)][string]$OutputDir,

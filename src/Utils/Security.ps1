@@ -4,13 +4,13 @@
 # Fix P0.11: Preflight check Test-WinLogCollectorPrerequisite
 # =====================================================
 
-function Test-IsAdmin {
+function global:Test-IsAdmin {
     return ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole(
         [Security.Principal.WindowsBuiltinRole]::Administrator
     )
 }
 
-function Test-WinLogCollectorPrerequisite {
+function global:Test-WinLogCollectorPrerequisite {
     param(
         [string]$RemoteHost,
         [int]$Port = 22,

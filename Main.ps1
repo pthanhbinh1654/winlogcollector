@@ -106,7 +106,7 @@ $Context = @{
 }
 
 # ---- 5. Single Unified Orchestration Function (P0.3) ----
-function Invoke-WinLogCollectorCycle {
+function global:Invoke-WinLogCollectorCycle {
     param(
         [Parameter(Mandatory)][hashtable]$Context,
         [string]$Mode = "continuous"

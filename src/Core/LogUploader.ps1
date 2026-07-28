@@ -5,7 +5,7 @@
 # Fix P0.8: MaxAgeDays retention (quarantine expired archives)
 # =====================================================
 
-function New-WinLogArchive {
+function global:New-WinLogArchive {
     param(
         [Parameter(Mandatory)][string]$JsonlPath,
         [Parameter(Mandatory)][string]$DestDir,
@@ -53,7 +53,7 @@ function New-WinLogArchive {
     }
 }
 
-function Test-SftpConnectivity {
+function global:Test-SftpConnectivity {
     param(
         [string]$RemoteHost,
         [int]$Port = 22
@@ -66,7 +66,7 @@ function Test-SftpConnectivity {
     }
 }
 
-function Send-WinLogArchive {
+function global:Send-WinLogArchive {
     [CmdletBinding()]
     param(
         [Parameter(Mandatory)]
@@ -116,7 +116,7 @@ bye
     }
 }
 
-function Move-WinLogArchiveToQueue {
+function global:Move-WinLogArchiveToQueue {
     param(
         [string]$ArchivePath,
         [string]$QueueDir,
@@ -140,7 +140,7 @@ function Move-WinLogArchiveToQueue {
     return $dest
 }
 
-function Retry-WinLogQueue {
+function global:Retry-WinLogQueue {
     param(
         [string]$QueueDir,
         [string]$QuarantineDir,
