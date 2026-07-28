@@ -1,0 +1,27 @@
+# Logs va files tam thoi
+HiddenLogs/
+*.zip
+*.json
+!config.json
+
+# SSH Keys - TUYET DOI KHONG COMMIT
+*.pem
+*.rsa
+*.key
+*_id_rsa
+*_id_ed25519
+.ssh/
+
+# PowerShell temp files
+sftp_cmd_*.txt
+
+# Windows system files
+Thumbs.db
+desktop.ini
+$RECYCLE.BIN/
+
+# IDE
+.vscode/
+.idea/
+*.suo
+*.user

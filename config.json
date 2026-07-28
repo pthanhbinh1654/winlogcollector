@@ -1,0 +1,17 @@
+{
+    "Remote": {
+        "Host": "192.168.1.2",
+        "User": "sftp",
+        "SSHKeyPath": "C:\\Users\\Binh\\.ssh\\sftp_id_rsa",
+        "RemotePath": "/home/sftp/uploads"
+    },
+    "Local": {
+        "FolderLuuLog": "C:\\"
+    },
+    "Collection": {
+        "EventChannels": ["Application", "Security", "System", "Setup"],
+        "EventIDs": [4624, 4688, 4104],
+        "DefaultIntervalMinutes": 3,
+        "DefaultDurationMinutes": 9
+    }
+}
