@@ -75,11 +75,28 @@ function global:Get-WinEventBatch {
         [string]$Channel,
         [long]$AfterRecordId = 0,
         [DateTime]$FallbackStartTime,       # Dung khi chua co checkpoint
+        [Nullable[DateTime]]$StartTime = $null,  # Tu ngay (Custom Range)
+        [Nullable[DateTime]]$EndTime = $null,    # Den ngay (Custom Range)
         [int[]]$EventIDs = @(),
         [int]$BatchSize = 5000
     )
 
-    if ($AfterRecordId -gt 0) {
+    if ($StartTime -and $EndTime) {
+        # Custom Date Range mode
+        $filter = @{ LogName = $Channel; StartTime = $StartTime; EndTime = $EndTime }
+        if ($EventIDs.Count -gt 0) { $filter.Id = $EventIDs }
+        try {
+            $events = Get-WinEvent -FilterHashtable $filter -MaxEvents $BatchSize -Oldest -ErrorAction Stop
+            return @{ Events = $events; HasMore = ($events.Count -eq $BatchSize) }
+        }
+        catch {
+            if ($_.Exception.Message -match 'No events' -or $_.Exception.Message -match 'No matching events') {
+                return @{ Events = @(); HasMore = $false }
+            }
+            return @{ Events = @(); HasMore = $false; Error = $_.Exception.Message }
+        }
+    }
+    elseif ($AfterRecordId -gt 0) {
         # Co checkpoint: dung XPath theo RecordID, khong gioi han thoi gian
         $idFilter = if ($EventIDs.Count -gt 0) {
             $idOr = ($EventIDs | ForEach-Object { "EventID=$_" }) -join " or "
@@ -132,6 +149,8 @@ function global:Invoke-WinLogCollection {
         [Parameter(Mandatory)][string]$OutputDir,
         [Parameter(Mandatory)][string]$StateFile,
         [DateTime]$FallbackStartTime = (Get-Date).ToUniversalTime().AddMinutes(-60),
+        [Nullable[DateTime]]$StartTime = $null,
+        [Nullable[DateTime]]$EndTime = $null,
         [string]$HostId = $env:COMPUTERNAME,
         [int]$BatchSize = 5000
     )
@@ -171,7 +190,8 @@ function global:Invoke-WinLogCollection {
 
         while ($hasMore) {
             $result = Get-WinEventBatch -Channel $channel -AfterRecordId $lastWritten `
-                -FallbackStartTime $FallbackStartTime -EventIDs $eventIds -BatchSize $BatchSize
+                -FallbackStartTime $FallbackStartTime -StartTime $StartTime -EndTime $EndTime `
+                -EventIDs $eventIds -BatchSize $BatchSize
 
             if ($result.Error) { $channelError = $result.Error; break }
 

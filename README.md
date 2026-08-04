@@ -17,7 +17,8 @@
 - **Incremental Collection**: Collects Windows Event Logs using **oldest-first paginated XPath queries** anchored on `RecordID` checkpoints (guaranteeing zero duplicate records and zero data loss).
 - **Per-Channel Subscriptions**: Decouples event filtering into per-channel configuration arrays (`Subscriptions`).
 - **Durable Outbox Crash Recovery**: Drains and recovers all pending `.ready` and `.zip` files at the beginning of every collection cycle.
-- **Secure Compression & Upload**: Compresses logs into ZIP archives and uploads via OpenSSH SFTP with mandatory **`StrictHostKeyChecking=yes`** & host key verification.
+- **Secure Compression & SFTP Upload**: Compresses logs into ZIP archives and uploads via OpenSSH SFTP with mandatory **`StrictHostKeyChecking=yes`** & host key verification.
+- **Automated ELK Pipeline Integration**: Includes full ELK Stack (Elasticsearch, Logstash, Kibana) deployment with **Auto-ZIP Extraction Sidecar** and **1-Click Setup script**.
 - **Offline Resilient Queue**: Features exponential backoff retries, queue disk safety limits (`MaxSizeMB`), attempt caps (`MaxAttempts`), and automatic quarantining (`MaxAgeDays`).
 - **Headless Core Architecture**: Core engine is 100% headless with zero WinForms dependency. Both GUI and Silent modes execute through a single unified entry point `Invoke-WinLogCollectorCycle`.
 
@@ -30,15 +31,22 @@ flowchart TD
     A[Windows Event Logs\nSecurity / System / Operational] -->|XPath EventRecordID > LastId| B[LogCollector Engine]
     B -->|Atomic Write JSONL| C[Ready/*.jsonl.ready]
     C -->|Compress-Archive| D[Ready/*.zip]
-    D -->|SFTP + Strict HostKey Check| E[Remote SFTP Server]
+    D -->|SFTP Transfer Port 2222| E[WSL2 / SFTP Container]
     D -.->|Upload Failure| F[Queue/*.zip + Sidecar JSON]
     F -->|Exponential Backoff Retry| E
     F -.->|Expired / Exceeded MaxAttempts| G[Quarantine/]
 
+    subgraph ELK Stack Integration
+        E -->|Volume sftp_incoming| H[Auto-Extractor Container]
+        H -->|Auto Unzip *.jsonl.ready| I[Logstash Engine]
+        I -->|Parse & Index| J[Elasticsearch]
+        J -->|Dashboard Visuals| K[Kibana UI http://localhost:5601]
+    end
+
     style A fill:#0078D4,color:#fff
     style B fill:#1565c0,color:#fff
     style E fill:#2e7d32,color:#fff
-    style G fill:#d32f2f,color:#fff
+    style J fill:#f57c00,color:#fff
 ```
 
 ---
@@ -48,12 +56,22 @@ flowchart TD
 ```
 WinLogCollector/
 ├── Main.ps1                    # Orchestrator & Single Entry Point
+├── setup-elk.ps1               # 1-Click Automated ELK & SFTP Deployment Script
 ├── config.json                 # JSON Configuration File (Host, Keys, Subscriptions...)
 ├── README.md                   # Documentation (English)
 ├── README_VN.md                # Documentation (Vietnamese)
 ├── LICENSE                     # Open-source MIT License
 ├── config/
+│   ├── config.example.json     # Configuration template
 │   └── config.schema.json      # JSON Schema validation
+├── deploy/
+│   └── elk/                    # ELK Stack & SFTP Infrastructure Configs
+│       ├── docker-compose.elk.yml
+│       └── logstash/
+│           ├── config/logstash.yml
+│           └── pipeline/winlog.conf
+├── docs/
+│   └── ELK_SETUP.md            # Comprehensive ELK Setup Guide (1-Click & Manual)
 ├── src/
 │   ├── Core/
 │   │   ├── LogCollector.ps1    # Incremental oldest-first Event Log collector
@@ -63,10 +81,9 @@ WinLogCollector/
 │   └── Utils/
 │       ├── Logger.ps1          # Thread-safe persistent JSON logger & UI callback sink
 │       └── Security.ps1        # Admin check & Preflight check (Test-WinLogCollectorPrerequisite)
-├── tests/
-│   └── Unit/
-│       └── Collector.Tests.ps1 # Pester Unit Tests suite
-└── archive/                    # Archived legacy script iterations
+└── tests/
+    └── Unit/
+        └── Collector.Tests.ps1 # Pester Unit Tests suite
 ```
 
 ---
@@ -76,12 +93,12 @@ WinLogCollector/
 ```json
 {
   "Remote": {
-    "Host": "192.168.1.100",
-    "Port": 22,
-    "User": "sftpuser",
+    "Host": "127.0.0.1",
+    "Port": 2222,
+    "User": "winlog",
     "SSHKeyPath": "C:\\ProgramData\\WinLogCollector\\keys\\id_rsa",
     "KnownHostsPath": "C:\\ProgramData\\WinLogCollector\\keys\\known_hosts",
-    "RemotePath": "/var/log/collectors"
+    "RemotePath": "/incoming"
   },
   "Local": {
     "DataDir": "C:\\ProgramData\\WinLogCollector"
@@ -114,7 +131,44 @@ WinLogCollector/
 
 ---
 
-## �️ Interactive WinForms Management Console (6 Tabs)
+## 🚀 Quick Start & ELK Setup
+
+### 1. ELK & SFTP Server Setup (Choose Method A or B)
+
+> 📖 **Full Guide**: See [docs/ELK_SETUP.md](docs/ELK_SETUP.md) for detailed step-by-step instructions.
+
+- **Method A — ⚡ 1-Click Automated Setup**:
+  Run in PowerShell (Run as Administrator):
+  ```powershell
+  powershell -ExecutionPolicy Bypass -File ".\setup-elk.ps1"
+  ```
+  *(Automates SSH Key pair generation, Docker WSL2 startup, key injection, `known_hosts` configuration, and `config.json` updating).*
+
+- **Method B — 🛠️ Manual Step-by-Step Setup**:
+  Follow the manual step-by-step instructions detailed in [docs/ELK_SETUP.md](docs/ELK_SETUP.md#️-phương-pháp-2-cài-đặt-thủ-công-từng-bước-manual-setup-step-by-step).
+
+---
+
+### 2. Run WinLogCollector Agent
+
+- **Launch Interactive GUI Management Console**:
+  ```powershell
+  powershell -ExecutionPolicy Bypass -File ".\Main.ps1"
+  ```
+
+- **Run Headless Silent Mode (Windows Task Scheduler)**:
+  ```powershell
+  powershell -ExecutionPolicy Bypass -File ".\Main.ps1" -Silent
+  ```
+
+- **Run Pester Unit Tests**:
+  ```powershell
+  Invoke-Pester -Path ".\tests\Unit\Collector.Tests.ps1"
+  ```
+
+---
+
+## 🖥️ Interactive WinForms Management Console (6 Tabs)
 
 | Tab | Name | Key Functionality |
 |---|---|---|
@@ -124,31 +178,6 @@ WinLogCollector/
 | **4. 🌐 SFTP Setup** | Connection & Test Tools | Configure Host, Port, Username, RemotePath, SSH Key, KnownHosts; test TCP port 22 and save directly to `config.json`. |
 | **5. 📦 Queue Buffer** | Offline Buffer & Quarantine | Interactive DataGridView listing queued `.zip` archives (Size, Attempts, Next Retry Time); manual Retry All Now & Open Folder actions. |
 | **6. 🔍 Preflight Check** | System Prerequisites Audit | Interactive DataGridView evaluating 8 system prerequisites (Admin rights, `sftp.exe`, SSH Key, `known_hosts`, Event Channels, TCP port 22). |
-
----
-
-## � Getting Started & Execution
-
-### 1. Clone Repository & Setup
-```powershell
-git clone https://github.com/pthanhbinh1654/winlogcollector.git
-cd winlogcollector
-```
-
-### 2. Launch GUI Management Console (Default Mode)
-```powershell
-powershell -ExecutionPolicy Bypass -File ".\Main.ps1"
-```
-
-### 3. Run Silent Mode (Headless / Windows Task Scheduler)
-```powershell
-powershell -ExecutionPolicy Bypass -File ".\Main.ps1" -Silent
-```
-
-### 4. Run Pester Unit Tests
-```powershell
-Invoke-Pester -Path ".\tests\Unit\Collector.Tests.ps1"
-```
 
 ---
 

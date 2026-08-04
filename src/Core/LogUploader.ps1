@@ -95,11 +95,11 @@ bye
 
     $sftpArgs = @(
         '-o', 'StrictHostKeyChecking=yes',
-        '-o', "UserKnownHostsFile=`"$KnownHostsPath`"",
+        '-o', "UserKnownHostsFile=$KnownHostsPath",
         '-o', 'BatchMode=yes',
         '-o', 'ConnectTimeout=15',
         '-P', $Port,
-        '-i', "`"$SSHKeyPath`"",
+        '-i', $SSHKeyPath,
         '-b', "`"$sftpPath`"",
         "${User}@${RemoteHost}"
     )
@@ -185,7 +185,7 @@ function global:Retry-WinLogQueue {
         # Fix P0.8: Kiem tra MaxAgeDays retention
         if ($meta -and $meta.createdUtc) {
             try {
-                $created = [DateTime]::Parse($meta.createdUtc)
+                $created = [DateTime]::Parse($meta.createdUtc).ToUniversalTime()
                 if ([DateTime]::UtcNow -gt $created.AddDays($MaxAgeDays)) {
                     AddLog "File $($zip.Name) da vuot qua MaxAgeDays ($MaxAgeDays ngay). Chuyen Quarantine." "WARNING"
                     if (-not (Test-Path $QuarantineDir)) { New-Item $QuarantineDir -ItemType Directory -Force | Out-Null }
@@ -200,7 +200,7 @@ function global:Retry-WinLogQueue {
         # Kiem tra nextAttemptUtc
         if ($meta -and $meta.nextAttemptUtc) {
             try {
-                $nextTime = [DateTime]::Parse($meta.nextAttemptUtc)
+                $nextTime = [DateTime]::Parse($meta.nextAttemptUtc).ToUniversalTime()
                 if ([DateTime]::UtcNow -lt $nextTime) {
                     AddLog "Bo qua $($zip.Name) - cho den $($nextTime.ToString('HH:mm:ss')) UTC" "INFO"
                     continue

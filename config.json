@@ -1,57 +1,59 @@
-{
-    "Remote": {
-        "Host": "192.168.1.2",
-        "Port": 22,
-        "User": "sftp",
-        "SSHKeyPath": "C:\\ProgramData\\WinLogCollector\\keys\\collector_id_rsa",
-        "KnownHostsPath": "C:\\ProgramData\\WinLogCollector\\ssh\\known_hosts",
-        "RemotePath": "/home/sftp/uploads"
-    },
-    "Local": {
-        "DataDir": "C:\\ProgramData\\WinLogCollector"
-    },
-    "Collection": {
-        "Subscriptions": [
-            {
-                "Channel": "Security",
-                "EventIDs": [
-                    4624,
-                    4625,
-                    4634,
-                    4647,
-                    4688,
-                    4720,
-                    4732,
-                    1102
-                ]
-            },
-            {
-                "Channel": "System",
-                "EventIDs": [
-                    6005,
-                    6006,
-                    6008,
-                    7045
-                ]
-            },
-            {
-                "Channel": "Application",
-                "EventIDs": []
-            },
-            {
-                "Channel": "Microsoft-Windows-PowerShell/Operational",
-                "EventIDs": [
-                    4103,
-                    4104
-                ]
-            }
-        ],
-        "DefaultIntervalMinutes": 3,
-        "DefaultDurationMinutes": 9
-    },
-    "Queue": {
-        "MaxSizeMB": 2048,
-        "MaxAgeDays": 14,
-        "MaxAttempts": 20
-    }
+﻿{
+    "Collection":  {
+                       "DefaultIntervalMinutes":  3,
+                       "Subscriptions":  [
+                                             {
+                                                 "Channel":  "Security",
+                                                 "EventIDs":  [
+                                                                  4624,
+                                                                  4625,
+                                                                  4634,
+                                                                  4647,
+                                                                  4688,
+                                                                  4720,
+                                                                  4732,
+                                                                  1102
+                                                              ]
+                                             },
+                                             {
+                                                 "Channel":  "System",
+                                                 "EventIDs":  [
+                                                                  6005,
+                                                                  6006,
+                                                                  6008,
+                                                                  7045
+                                                              ]
+                                             },
+                                             {
+                                                 "Channel":  "Application",
+                                                 "EventIDs":  [
+
+                                                              ]
+                                             },
+                                             {
+                                                 "Channel":  "Microsoft-Windows-PowerShell/Operational",
+                                                 "EventIDs":  [
+                                                                  4103,
+                                                                  4104
+                                                              ]
+                                             }
+                                         ],
+                       "DefaultDurationMinutes":  9
+                   },
+    "Local":  {
+                  "DataDir":  "C:\\ProgramData\\WinLogCollector"
+              },
+    "Queue":  {
+                  "MaxAttempts":  20,
+                  "MaxSizeMB":  2048,
+                  "MaxAgeDays":  14
+              },
+    "Remote":  {
+                   "Port":  2222,
+                   "Host":  "127.0.0.1",
+                   "SSHKeyPath":  "C:\\ProgramData\\WinLogCollector\\keys\\id_rsa",
+                   "KnownHostsPath":  "C:\\Users\\ftb\\.ssh\\known_hosts",
+                   "User":  "winlog",
+                   "RemotePath":  "/incoming"
+               }
 }

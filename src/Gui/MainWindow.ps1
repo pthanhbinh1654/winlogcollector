@@ -72,20 +72,20 @@ function Show-MainWindow {
     $form.AutoScaleMode = [System.Windows.Forms.AutoScaleMode]::Dpi
 
     # Styles
-    $fontHeader  = New-Object System.Drawing.Font("Segoe UI", 15, [System.Drawing.FontStyle]::Bold)
-    $fontSub     = New-Object System.Drawing.Font("Segoe UI", 9,  [System.Drawing.FontStyle]::Regular)
+    $fontHeader = New-Object System.Drawing.Font("Segoe UI", 15, [System.Drawing.FontStyle]::Bold)
+    $fontSub = New-Object System.Drawing.Font("Segoe UI", 9, [System.Drawing.FontStyle]::Regular)
     $fontSection = New-Object System.Drawing.Font("Segoe UI", 11, [System.Drawing.FontStyle]::Bold)
-    $fontBold    = New-Object System.Drawing.Font("Segoe UI", 10, [System.Drawing.FontStyle]::Bold)
+    $fontBold = New-Object System.Drawing.Font("Segoe UI", 10, [System.Drawing.FontStyle]::Bold)
     $fontConsole = New-Object System.Drawing.Font("Consolas", 10)
 
-    $bgCard      = [System.Drawing.Color]::FromArgb(40, 40, 45)
-    $bgInput     = [System.Drawing.Color]::FromArgb(45, 45, 50)
-    $accentBlue  = [System.Drawing.Color]::FromArgb(0, 122, 204)
+    $bgCard = [System.Drawing.Color]::FromArgb(40, 40, 45)
+    $bgInput = [System.Drawing.Color]::FromArgb(45, 45, 50)
+    $accentBlue = [System.Drawing.Color]::FromArgb(0, 122, 204)
     $accentGreen = [System.Drawing.Color]::FromArgb(40, 167, 69)
-    $accentRed   = [System.Drawing.Color]::FromArgb(220, 53, 69)
-    $accentOrange= [System.Drawing.Color]::FromArgb(255, 152, 0)
-    $accentGray  = [System.Drawing.Color]::FromArgb(70, 70, 85)
-    $accentDark  = [System.Drawing.Color]::FromArgb(70, 70, 90)
+    $accentRed = [System.Drawing.Color]::FromArgb(220, 53, 69)
+    $accentOrange = [System.Drawing.Color]::FromArgb(255, 152, 0)
+    $accentGray = [System.Drawing.Color]::FromArgb(70, 70, 85)
+    $accentDark = [System.Drawing.Color]::FromArgb(70, 70, 90)
 
     # ---- Top Header Panel ----
     $pnlHeader = New-Object System.Windows.Forms.Panel
@@ -321,20 +321,20 @@ function Show-MainWindow {
     $grpCollMode = New-Object System.Windows.Forms.GroupBox
     $grpCollMode.Text = " Chế Độ & Phạm Vi Thu Thập "
     $grpCollMode.Location = New-Object System.Drawing.Point(20, 15)
-    $grpCollMode.Size = New-Object System.Drawing.Size(1090, 100)
+    $grpCollMode.Size = New-Object System.Drawing.Size(1090, 115)
     $grpCollMode.ForeColor = [System.Drawing.Color]::LightGray
     $tabCollection.Controls.Add($grpCollMode)
 
     $rbModeCheckpoint = New-Object System.Windows.Forms.RadioButton
     $rbModeCheckpoint.Text = "Theo Checkpoint tự động (RecordID Incremental - Khuyên dùng)"
     $rbModeCheckpoint.Checked = $true
-    $rbModeCheckpoint.Location = New-Object System.Drawing.Point(20, 25)
+    $rbModeCheckpoint.Location = New-Object System.Drawing.Point(20, 22)
     $rbModeCheckpoint.AutoSize = $true
     $grpCollMode.Controls.Add($rbModeCheckpoint)
 
     $rbModeLookback = New-Object System.Windows.Forms.RadioButton
     $rbModeLookback.Text = "Theo N phút gần nhất (Lookback):"
-    $rbModeLookback.Location = New-Object System.Drawing.Point(20, 58)
+    $rbModeLookback.Location = New-Object System.Drawing.Point(20, 50)
     $rbModeLookback.AutoSize = $true
     $grpCollMode.Controls.Add($rbModeLookback)
 
@@ -342,7 +342,7 @@ function Show-MainWindow {
     $numLookbackMin.Minimum = 1
     $numLookbackMin.Maximum = 10080
     $numLookbackMin.Value = $Config.Collection.DefaultIntervalMinutes
-    $numLookbackMin.Location = New-Object System.Drawing.Point(285, 56)
+    $numLookbackMin.Location = New-Object System.Drawing.Point(285, 48)
     $numLookbackMin.Size = New-Object System.Drawing.Size(70, 25)
     $numLookbackMin.BackColor = $bgInput
     $numLookbackMin.ForeColor = [System.Drawing.Color]::White
@@ -350,14 +350,49 @@ function Show-MainWindow {
 
     $lblLookbackUnit = New-Object System.Windows.Forms.Label
     $lblLookbackUnit.Text = "phút"
-    $lblLookbackUnit.Location = New-Object System.Drawing.Point(362, 58)
+    $lblLookbackUnit.Location = New-Object System.Drawing.Point(362, 50)
     $lblLookbackUnit.AutoSize = $true
     $grpCollMode.Controls.Add($lblLookbackUnit)
+
+    # Che do Date Range custom (Tu ngay -> Den ngay)
+    $rbModeCustomRange = New-Object System.Windows.Forms.RadioButton
+    $rbModeCustomRange.Text = "Khoảng thời gian chọn lọc:"
+    $rbModeCustomRange.Location = New-Object System.Drawing.Point(20, 78)
+    $rbModeCustomRange.AutoSize = $true
+    $grpCollMode.Controls.Add($rbModeCustomRange)
+
+    $lblFromDate = New-Object System.Windows.Forms.Label
+    $lblFromDate.Text = "Từ:"
+    $lblFromDate.Location = New-Object System.Drawing.Point(240, 80)
+    $lblFromDate.AutoSize = $true
+    $grpCollMode.Controls.Add($lblFromDate)
+
+    $dtpFromDate = New-Object System.Windows.Forms.DateTimePicker
+    $dtpFromDate.Format = [System.Windows.Forms.DateTimePickerFormat]::Custom
+    $dtpFromDate.CustomFormat = "yyyy-MM-dd HH:mm"
+    $dtpFromDate.Value = (Get-Date).AddDays(-1)
+    $dtpFromDate.Location = New-Object System.Drawing.Point(270, 76)
+    $dtpFromDate.Size = New-Object System.Drawing.Size(150, 25)
+    $grpCollMode.Controls.Add($dtpFromDate)
+
+    $lblToDate = New-Object System.Windows.Forms.Label
+    $lblToDate.Text = "Đến:"
+    $lblToDate.Location = New-Object System.Drawing.Point(435, 80)
+    $lblToDate.AutoSize = $true
+    $grpCollMode.Controls.Add($lblToDate)
+
+    $dtpToDate = New-Object System.Windows.Forms.DateTimePicker
+    $dtpToDate.Format = [System.Windows.Forms.DateTimePickerFormat]::Custom
+    $dtpToDate.CustomFormat = "yyyy-MM-dd HH:mm"
+    $dtpToDate.Value = Get-Date
+    $dtpToDate.Location = New-Object System.Drawing.Point(475, 76)
+    $dtpToDate.Size = New-Object System.Drawing.Size(150, 25)
+    $grpCollMode.Controls.Add($dtpToDate)
 
     # Subscriptions DataGridView
     $grpSubs = New-Object System.Windows.Forms.GroupBox
     $grpSubs.Text = " Danh Sách Event Log Subscriptions "
-    $grpSubs.Location = New-Object System.Drawing.Point(20, 125)
+    $grpSubs.Location = New-Object System.Drawing.Point(20, 140)
     $grpSubs.Size = New-Object System.Drawing.Size(1090, 180)
     $grpSubs.ForeColor = [System.Drawing.Color]::LightGray
     $tabCollection.Controls.Add($grpSubs)
@@ -397,7 +432,7 @@ function Show-MainWindow {
 
     # Save Subscriptions Button
     $btnSaveSubs = New-ActionButton -Text "[💾] Lưu Cấu Hình Subscriptions" -Color $accentBlue -Width 260
-    $btnSaveSubs.Location = New-Object System.Drawing.Point(20, 312)
+    $btnSaveSubs.Location = New-Object System.Drawing.Point(20, 330)
     $tabCollection.Controls.Add($btnSaveSubs)
 
     $btnSaveSubs.Add_Click({
@@ -826,7 +861,19 @@ function Show-MainWindow {
         $lblAgentBadge.Text = "● ĐANG THU THẬP LOG..."
         $lblAgentBadge.ForeColor = [System.Drawing.Color]::Yellow
         try {
-            $res = Invoke-WinLogCollectorCycle -Context $Context -Mode "limited"
+            $sTime = $null; $eTime = $null
+            if ($rbModeCustomRange.Checked) {
+                $sTime = $dtpFromDate.Value.ToUniversalTime()
+                $eTime = $dtpToDate.Value.ToUniversalTime()
+                AddLog "Chế độ: Thu thập theo khoảng thời gian ($($sTime.ToString('yyyy-MM-dd HH:mm UTC')) -> $($eTime.ToString('yyyy-MM-dd HH:mm UTC')))" "INFO"
+            }
+            elseif ($rbModeLookback.Checked) {
+                $mins = [int]$numLookbackMin.Value
+                $sTime = (Get-Date).ToUniversalTime().AddMinutes(-$mins)
+                $eTime = (Get-Date).ToUniversalTime()
+                AddLog "Chế độ: Thu thập Lookback $mins phút gần nhất" "INFO"
+            }
+            $res = Invoke-WinLogCollectorCycle -Context $Context -Mode "limited" -StartTime $sTime -EndTime $eTime
             if ($res.Success) {
                 $card1.ValLabel.Text = [string]$res.Collected
                 AddLog "Chu kỳ thu thập hoàn tất thành công. Số log: $($res.Collected)" "SUCCESS"

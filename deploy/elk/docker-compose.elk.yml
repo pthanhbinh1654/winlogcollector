@@ -1,0 +1,75 @@
+services:
+  elasticsearch:
+    image: docker.elastic.co/elasticsearch/elasticsearch:8.13.4
+    container_name: es01
+    environment:
+      - discovery.type=single-node
+      - xpack.security.enabled=false
+      - ES_JAVA_OPTS=-Xms512m -Xmx512m
+    volumes:
+      - esdata:/usr/share/elasticsearch/data
+    ports:
+      - "9200:9200"
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:9200/_cluster/health || exit 1"]
+      interval: 15s
+      timeout: 10s
+      retries: 10
+
+  logstash:
+    image: docker.elastic.co/logstash/logstash:8.13.4
+    container_name: logstash01
+    volumes:
+      - ./logstash/pipeline:/usr/share/logstash/pipeline:ro
+      - ./logstash/config/logstash.yml:/usr/share/logstash/config/logstash.yml:ro
+      - sftp_incoming:/input:ro
+    depends_on:
+      elasticsearch:
+        condition: service_healthy
+    environment:
+      - LS_JAVA_OPTS=-Xms256m -Xmx256m
+
+  kibana:
+    image: docker.elastic.co/kibana/kibana:8.13.4
+    container_name: kibana01
+    ports:
+      - "5601:5601"
+    environment:
+      - ELASTICSEARCH_HOSTS=http://elasticsearch:9200
+      - xpack.security.enabled=false
+    depends_on:
+      elasticsearch:
+        condition: service_healthy
+
+  sftp:
+    image: atmoz/sftp:latest
+    container_name: sftp01
+    ports:
+      - "2222:22"
+    volumes:
+      - sftp_incoming:/home/winlog/incoming
+      - ./sftp/ssh_host_ed25519_key:/etc/ssh/ssh_host_ed25519_key:ro
+      - ./sftp/ssh_host_rsa_key:/etc/ssh/ssh_host_rsa_key:ro
+    command: winlog:winlog123:1001
+
+  extractor:
+    image: alpine:latest
+    container_name: extractor01
+    volumes:
+      - sftp_incoming:/incoming
+    restart: always
+    command: >
+      sh -c "apk add --no-cache unzip &&
+             while true; do
+               for f in /incoming/continuous/*.zip /incoming/limited/*.zip; do
+                 if [ -f \"$$f\" ]; then
+                   dir=$$(dirname \"$$f\")
+                   unzip -o -q \"$$f\" -d \"$$dir\" && rm -f \"$$f\"
+                 fi
+               done
+               sleep 3
+             done"
+
+volumes:
+  esdata:
+  sftp_incoming:

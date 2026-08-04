@@ -109,7 +109,9 @@ $Context = @{
 function global:Invoke-WinLogCollectorCycle {
     param(
         [Parameter(Mandatory)][hashtable]$Context,
-        [string]$Mode = "continuous"
+        [string]$Mode = "continuous",
+        [Nullable[DateTime]]$StartTime = $null,
+        [Nullable[DateTime]]$EndTime = $null
     )
 
     $cfg = $Context.Config
@@ -161,7 +163,8 @@ function global:Invoke-WinLogCollectorCycle {
         $collectResult = Invoke-WinLogCollection `
             -Subscriptions $cfg.Collection.Subscriptions `
             -OutputDir $Context.ReadyDir -StateFile $Context.StateFile `
-            -FallbackStartTime (Get-Date).ToUniversalTime().AddMinutes(-$cfg.Collection.DefaultIntervalMinutes)
+            -FallbackStartTime (Get-Date).ToUniversalTime().AddMinutes(-$cfg.Collection.DefaultIntervalMinutes) `
+            -StartTime $StartTime -EndTime $EndTime
     }
     catch {
         AddLog "Loi ngoai le khi thu thap log: $_" "ERROR"
