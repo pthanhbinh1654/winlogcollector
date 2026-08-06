@@ -93,6 +93,8 @@ function global:Test-WinLogCollectorPrerequisite {
         }
     }
 
-    AddLog "--- Ket thuc Preflight Check (Ket qua: $(if($passed){'DAT'}else{'KHONG DAT'})) ---" (if ($passed) { "SUCCESS" }else { "ERROR" })
+    $logLevel = if ($passed) { "SUCCESS" } else { "ERROR" }
+    $resText = if ($passed) { "DAT" } else { "KHONG DAT" }
+    AddLog "--- Ket thuc Preflight Check (Ket qua: $resText) ---" $logLevel
     return $passed
 }

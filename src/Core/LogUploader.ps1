@@ -256,6 +256,7 @@ function KTKN {
     )
     $ok = Test-SftpConnectivity -RemoteHost $TenKN -Port $Port
     $msg = if ($ok) { "✅ [${TenKN}]:$Port co the ket noi." } else { "❌ [${TenKN}]:$Port khong ket noi duoc." }
-    AddLog $msg (if ($ok) { "SUCCESS" } else { "WARNING" })
+    $okLevel = if ($ok) { "SUCCESS" } else { "WARNING" }
+    AddLog $msg $okLevel
     return $ok
 }

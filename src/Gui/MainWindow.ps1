@@ -732,21 +732,29 @@ function Show-MainWindow {
 
         # Check Admin
         $isAdmin = Test-IsAdmin
-        $gridPreflight.Rows.Add("Quyền Administrator", (if ($isAdmin) { "ĐẠT" }else { "THẤT BẠI" }), (if ($isAdmin) { "Đang chạy với quyền Administrator" }else { "Cần chạy dưới quyền Administrator!" })) | Out-Null
+        $adminStatus = if ($isAdmin) { "ĐẠT" } else { "THẤT BẠI" }
+        $adminDetail = if ($isAdmin) { "Đang chạy với quyền Administrator" } else { "Cần chạy dưới quyền Administrator!" }
+        $gridPreflight.Rows.Add("Quyền Administrator", $adminStatus, $adminDetail) | Out-Null
         if ($isAdmin) { $passCount++ } else { $failCount++ }
 
         # Check sftp.exe
         $sftp = Get-Command "sftp.exe" -ErrorAction SilentlyContinue
         $sftpOk = ($null -ne $sftp)
-        $gridPreflight.Rows.Add("OpenSSH Client (sftp.exe)", (if ($sftpOk) { "ĐẠT" }else { "THẤT BẠI" }), (if ($sftpOk) { "Đã cài đặt: $($sftp.Source)" }else { "Không tìm thấy sftp.exe trong PATH!" })) | Out-Null
+        $sftpStatus = if ($sftpOk) { "ĐẠT" } else { "THẤT BẠI" }
+        $sftpDetail = if ($sftpOk) { "Đã cài đặt: $($sftp.Source)" } else { "Không tìm thấy sftp.exe trong PATH!" }
+        $gridPreflight.Rows.Add("OpenSSH Client (sftp.exe)", $sftpStatus, $sftpDetail) | Out-Null
 
         # Check SSH Key
         $keyOk = Test-Path $Config.Remote.SSHKeyPath
-        $gridPreflight.Rows.Add("SSH Private Key", (if ($keyOk) { "ĐẠT" }else { "THẤT BẠI" }), (if ($keyOk) { "Tìm thấy file: $($Config.Remote.SSHKeyPath)" }else { "File key không tồn tại!" })) | Out-Null
+        $keyStatus = if ($keyOk) { "ĐẠT" } else { "THẤT BẠI" }
+        $keyDetail = if ($keyOk) { "Tìm thấy file: $($Config.Remote.SSHKeyPath)" } else { "File key không tồn tại!" }
+        $gridPreflight.Rows.Add("SSH Private Key", $keyStatus, $keyDetail) | Out-Null
 
         # Check KnownHosts
         $khOk = Test-Path $Config.Remote.KnownHostsPath
-        $gridPreflight.Rows.Add("File KnownHosts", (if ($khOk) { "ĐẠT" }else { "CẢNH BÁO" }), (if ($khOk) { "Tìm thấy: $($Config.Remote.KnownHostsPath)" }else { "Khuyên dùng file known_hosts để bật StrictHostKeyChecking" })) | Out-Null
+        $khStatus = if ($khOk) { "ĐẠT" } else { "CẢNH BÁO" }
+        $khDetail = if ($khOk) { "Tìm thấy: $($Config.Remote.KnownHostsPath)" } else { "Khuyên dùng file known_hosts để bật StrictHostKeyChecking" }
+        $gridPreflight.Rows.Add("File KnownHosts", $khStatus, $khDetail) | Out-Null
 
         # Check Channels
         foreach ($sub in $Config.Collection.Subscriptions) {
@@ -759,12 +767,15 @@ function Show-MainWindow {
             }
             catch { $chMsg = $_.Exception.Message }
 
-            $gridPreflight.Rows.Add("Channel [$ch]", (if ($chOk) { "ĐẠT" }else { "THẤT BẠI" }), $chMsg) | Out-Null
+            $chStatus = if ($chOk) { "ĐẠT" } else { "THẤT BẠI" }
+            $gridPreflight.Rows.Add("Channel [$ch]", $chStatus, $chMsg) | Out-Null
         }
 
         # Check TCP Port 22
         $tcpOk = Test-NetConnection -ComputerName $Config.Remote.Host -Port $Config.Remote.Port -InformationLevel Quiet -WarningAction SilentlyContinue
-        $gridPreflight.Rows.Add("Kết Nối SFTP Server", (if ($tcpOk) { "ĐẠT" }else { "THẤT BẠI" }), (if ($tcpOk) { "Kết nối TCP tới $($Config.Remote.Host):$($Config.Remote.Port) THÀNH CÔNG" }else { "Không thể mở cổng TCP $($Config.Remote.Port) tới $($Config.Remote.Host)" })) | Out-Null
+        $tcpStatus = if ($tcpOk) { "ĐẠT" } else { "THẤT BẠI" }
+        $tcpDetail = if ($tcpOk) { "Kết nối TCP tới $($Config.Remote.Host):$($Config.Remote.Port) THÀNH CÔNG" } else { "Không thể mở cổng TCP $($Config.Remote.Port) tới $($Config.Remote.Host)" }
+        $gridPreflight.Rows.Add("Kết Nối SFTP Server", $tcpStatus, $tcpDetail) | Out-Null
 
         if ($tcpOk) {
             $card3.ValLabel.Text = "ONLINE"
