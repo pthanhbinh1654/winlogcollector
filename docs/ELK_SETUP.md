@@ -24,6 +24,17 @@ Tài liệu hướng dẫn triển khai hệ thống **ELK Stack (Elasticsearch,
 
 ---
 
+## 📖 Quy Chuẩn Kỹ Thuật Truy Vấn Log (Microsoft Get-WinEvent Standards)
+
+Tài liệu tham chiếu chính thức từ Microsoft Learn: [Get-WinEvent (Microsoft.PowerShell.Diagnostics)](https://learn.microsoft.com/en-us/powershell/module/microsoft.powershell.diagnostics/get-winevent).
+
+Hệ thống **WinLogCollector** tuân thủ nghiêm ngặt các quy chuẩn hiệu năng của Microsoft đối với cmdlet `Get-WinEvent`:
+
+1. **Truy vấn Tầng Hệ Điều Hành (`-FilterXPath` & `-FilterHashtable`)**: Không sử dụng `Where-Object` để tránh nạp dữ liệu thô vào RAM. Mọi bộ lọc được đẩy trực tiếp xuống tầng Windows Event Log Subsystem (C/C++ API layer).
+2. **Thứ Tự Tuyến Tính (`-Oldest`)**: Bắt buộc truy vấn theo chiều thời gian từ cũ nhất đến mới nhất (*Oldest-First*) để đảm bảo checkpoint `EventRecordID` (số nguyên 64-bit tự tăng) tăng dần chính xác, chống lặp log.
+3. **Giới Hạn Bộ Nhớ Đệm (`-MaxEvents`)**: Giới hạn `BatchSize = 5000` cho mỗi chu kỳ đọc để bảo vệ bộ nhớ RAM.
+4. **Tiền Kiểm Tra Trạng Thái Log (`-ListLog` / `EventLogConfiguration`)**: Kiểm tra sự tồn tại và trạng thái kích hoạt của kênh log trước khi đọc.
+
 ## ⚡ PHƯƠNG PHÁP 1: Cài Đặt Nhanh 1-Click (Quick Automation)
 
 Phương pháp này tự động hóa 100% việc sinh SSH Key, bật Docker WSL2, inject Public Key, cập nhật `known_hosts` và `config.json`.
