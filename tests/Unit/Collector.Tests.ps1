@@ -32,6 +32,22 @@ Describe "WinLogCollector Preflight Checks" {
     }
 }
 
+Describe "WinLogCollector Channel Validation" {
+    It "Should return true for existing channel System" {
+        (Test-WinLogChannelExists -Channel "System") | Should Be $true
+    }
+
+    It "Should return false for non-existent channel" {
+        (Test-WinLogChannelExists -Channel "InvalidChannelName123_NonExistent") | Should Be $false
+    }
+
+    It "Should return error message when querying non-existent channel in Get-WinEventBatch" {
+        $res = Get-WinEventBatch -Channel "InvalidChannelName123_NonExistent" -FallbackStartTime (Get-Date)
+        $res.Events.Count | Should Be 0
+        ($res.Error -match "không tồn tại") | Should Be $true
+    }
+}
+
 Describe "WinLogCollector Log Archive Creation" {
     It "Should create a valid ZIP archive from JSONL file" {
         $tempDir = Join-Path $env:TEMP "collector_test_$([System.Guid]::NewGuid().ToString('N'))"

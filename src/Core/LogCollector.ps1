@@ -69,6 +69,18 @@ function global:ConvertFrom-WinEventRecord {
     }
 }
 
+function global:Test-WinLogChannelExists {
+    param([string]$Channel)
+    if ([string]::IsNullOrWhiteSpace($Channel)) { return $false }
+    try {
+        $logConfig = [System.Diagnostics.Eventing.Reader.EventLogConfiguration]::new($Channel)
+        return ($null -ne $logConfig)
+    }
+    catch {
+        return $false
+    }
+}
+
 # ---- Query page theo XPath RecordID (oldest-first) ----
 function global:Get-WinEventBatch {
     param(
@@ -80,6 +92,10 @@ function global:Get-WinEventBatch {
         [int[]]$EventIDs = @(),
         [int]$BatchSize = 5000
     )
+
+    if (-not (Test-WinLogChannelExists -Channel $Channel)) {
+        return @{ Events = @(); HasMore = $false; Error = "Event Log Channel '$Channel' không tồn tại trên hệ thống này." }
+    }
 
     if ($StartTime -and $EndTime) {
         # Custom Date Range mode
