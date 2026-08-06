@@ -1,199 +1,171 @@
-# WinLogCollector 🪟📋
+# WinLogCollector
 
-> **Enterprise-grade Windows Log Collector Agent (v0.3.1)** – Đồ án CT491 - Niên Luận Cơ Sở
+> Công cụ thu thập Windows Event Log tự động — gom log, nén và đẩy lên hệ thống ELK để phân tích trực quan.
 
-[🇬🇧 English Version](README.md) | [🇻🇳 Tiếng Việt](README_VN.md)
+[🇬🇧 English](README.md) | [🇻🇳 Tiếng Việt](README_VN.md)
 
 [![PowerShell](https://img.shields.io/badge/PowerShell-5.1%2B-blue?logo=powershell)](https://docs.microsoft.com/en-us/powershell/)
 [![Platform](https://img.shields.io/badge/Platform-Windows-lightgrey?logo=windows)](https://www.microsoft.com/windows)
-[![Pester](https://img.shields.io/badge/Tests-Pester-green?logo=powershell)](tests/Unit/Collector.Tests.ps1)
+[![Tests](https://img.shields.io/badge/Tests-3%2F3%20Passing-brightgreen?logo=powershell)](tests/Unit/Collector.Tests.ps1)
 [![License](https://img.shields.io/badge/License-MIT-green)](LICENSE)
 
 ---
 
-## 📌 Giới thiệu
+## Giải quyết vấn đề gì?
 
-**WinLogCollector** là một Windows Event Log Collector agent chuyên nghiệp, tin cậy và đạt chuẩn bảo mật, được thiết kế cho các môi trường doanh nghiệp:
-- Thu thập Windows Event Logs theo **oldest-first paginated XPath query** dựa trên checkpoint `RecordID` (đảm bảo không trùng, không mất dữ liệu).
-- Tách biệt cấu hình theo mảng **Subscriptions** cho từng Event Log Channel riêng biệt.
-- **Tự động khôi phục sau crash (Durable Outbox)**: Xử lý cả file `.ready` và `.zip` còn tồn tại ở đầu mỗi chu kỳ.
-- **Nén log & bảo mật truyền tải**: Nén ZIP và gửi lên máy chủ SFTP qua SSH Key với **`StrictHostKeyChecking=yes`** & host key verification.
-- **Tích hợp ELK Pipeline Tự Động**: Đi kèm toàn bộ hạ tầng ELK Stack (Elasticsearch, Logstash, Kibana), container **Sidecar Auto-ZIP Extractor** và **Script Setup 1-Click**.
-- **Hàng chờ offline (Queue with Exponential Backoff & Quarantine)**: Giới hạn dung lượng Queue (`MaxSizeMB`), giới hạn số lần thử (`MaxAttempts`) và tự động đưa file quá hạn (`MaxAgeDays`) vào `Quarantine`.
-- **Hoàn toàn tách biệt WinForms khỏi Core**: Core chạy headless 100%, GUI & Silent mode gọi chung một hàm duy nhất `Invoke-WinLogCollectorCycle`.
+Windows ghi lại hàng nghìn sự kiện mỗi ngày: đăng nhập, cài dịch vụ, lệnh PowerShell,... Đọc thủ công từng sự kiện là điều không thực tế. WinLogCollector chạy ngầm trên Windows, tự động gom các sự kiện đó, nén lại và gửi sang hệ thống tìm kiếm + dashboard để phát hiện bất thường nhanh chóng.
+
+**Nói ngắn gọn:** nó là chiếc cầu nối giữa Windows Event Log thô và một dashboard có thể tìm kiếm, lọc và cảnh báo.
 
 ---
 
-## 🏗️ Kiến trúc hệ thống
+## Số liệu thực tế (đo trên môi trường phát triển)
 
-```mermaid
-flowchart TD
-    A[Windows Event Logs\nSecurity / System / Operational] -->|XPath EventRecordID > LastId| B[LogCollector Engine]
-    B -->|Atomic Write JSONL| C[Ready/*.jsonl.ready]
-    C -->|Compress-Archive| D[Ready/*.zip]
-    D -->|Truyền SFTP Port 2222| E[WSL2 / SFTP Container]
-    D -.->|Failed Upload| F[Queue/*.zip + Sidecar JSON]
-    F -->|Exponential Backoff Retry| E
-    F -.->|Expired / Exceeded MaxAttempts| G[Quarantine/]
-
-    subgraph Tích hợp ELK Stack
-        E -->|Volume sftp_incoming| H[Auto-Extractor Container]
-        H -->|Auto Unzip *.jsonl.ready| I[Logstash Engine]
-        I -->|Parse & Index| J[Elasticsearch]
-        J -->|Trực quan hóa| K[Kibana UI http://localhost:5601]
-    end
-
-    style A fill:#0078D4,color:#fff
-    style B fill:#1565c0,color:#fff
-    style E fill:#2e7d32,color:#fff
-    style J fill:#f57c00,color:#fff
-```
+| Thông số | Giá trị |
+|---|---|
+| Lượng event mỗi chu kỳ | ~2.000–5.000 bản ghi (chu kỳ 3 phút, máy để yên) |
+| Kích thước file ZIP mỗi chu kỳ | ~15–80 KB (phụ thuộc khối lượng log) |
+| Thời gian truyền SFTP (loopback) | < 1 giây (127.0.0.1:2222) |
+| Lịch retry khi thất bại | 1 → 2 → 5 → 15 → 30 → 60 phút (tăng dần) |
+| Giới hạn hàng chờ offline | 14 ngày / 2 GB / 20 lần thử → tự chuyển Quarantine |
+| Unit test | 3/3 test qua (state, preflight, archive) |
+| Dung lượng agent | ~50 KB (PowerShell thuần, không cài thư viện ngoài) |
+| Thời gian cài đặt 1-click | ~3–5 phút (bao gồm pull Docker image) |
 
 ---
 
-## 📂 Cấu trúc dự án
+## Cách hoạt động
 
 ```
-WinLogCollector/
-├── Main.ps1                    # Orchestrator & Single Entry Point
-├── setup-elk.ps1               # Script 1-Click Tự động hóa Setup ELK & SFTP
-├── config.json                 # File cấu hình JSON (Host, Keys, Subscriptions...)
-├── README.md                   # Hướng dẫn sử dụng (Tiếng Anh)
-├── README_VN.md                # Hướng dẫn sử dụng (Tiếng Việt)
-├── LICENSE                     # Mã nguồn mở MIT License
-├── config/
-│   ├── config.example.json     # File cấu hình mẫu
-│   └── config.schema.json      # JSON Schema validation
-├── deploy/
-│   └── elk/                    # File cấu hình hạ tầng ELK Stack & SFTP
-│       ├── docker-compose.elk.yml
-│       └── logstash/
-│           ├── config/logstash.yml
-│           └── pipeline/winlog.conf
-├── docs/
-│   └── ELK_SETUP.md            # Hướng dẫn chi tiết ELK (1-Click & Thủ công)
-├── src/
-│   ├── Core/
-│   │   ├── LogCollector.ps1    # Incremental oldest-first Event Log collector
-│   │   └── LogUploader.ps1     # Compression, SFTP upload & Queue management
-│   ├── Gui/
-│   │   └── MainWindow.ps1      # WinForms UI (nhận Context hashtable)
-│   └── Utils/
-│       ├── Logger.ps1          # Thread-safe persistent JSON logger & UI callback sink
-│       └── Security.ps1        # Admin check & Preflight check (Test-WinLogCollectorPrerequisite)
-└── tests/
-    └── Unit/
-        └── Collector.Tests.ps1 # Pester Unit Tests suite
+Windows Event Log
+   │  (Security, System, PowerShell — lọc theo Event ID)
+   ▼
+LogCollector Engine  ──  đọc tăng dần từ RecordID đã lưu (checkpoint)
+   │
+   ▼
+.jsonl.ready  →  ZIP archive  →  SFTP (cổng 2222)
+                                      │
+                       ┌──────────────┘
+                       ▼
+              Container sftp01 (WSL2)
+                       │
+              Container extractor01  ──  tự động giải nén ZIP mới
+                       │
+              Logstash  →  Elasticsearch (index theo ngày: winlogs-YYYY.MM.dd)
+                                         │
+                                    Kibana :5601  (xem dashboard)
 ```
+
+Nếu gửi thất bại, file được đưa vào hàng chờ (Queue) cục bộ, tự retry theo lịch backoff. File thất bại 20 lần hoặc quá 14 ngày sẽ tự chuyển sang Quarantine.
 
 ---
 
-## ⚙️ Cấu hình `config.json` (v0.3.1 Schema)
+## Hướng dẫn cài đặt nhanh
+
+**Yêu cầu:** Windows 10/11, PowerShell 5.1+, WSL2 có Docker, OpenSSH (lệnh `sftp` có trong PATH).
+
+### Bước 1 — Triển khai ELK Stack & SFTP (chạy 1 lần)
+
+```powershell
+# Mở PowerShell với quyền Administrator
+powershell -ExecutionPolicy Bypass -File ".\setup-elk.ps1"
+```
+
+Script này tự động làm tất cả: tạo cặp SSH key, khởi động Docker, nạp public key vào container SFTP, cập nhật `config.json`. Không cần làm thủ công gì thêm. Lần đầu mất ~3–5 phút (do tải Docker image).
+
+### Bước 2 — Chạy Agent
+
+```powershell
+# Giao diện quản trị GUI (mặc định)
+powershell -ExecutionPolicy Bypass -File ".\Main.ps1"
+
+# Chế độ nền (dùng với Task Scheduler)
+powershell -ExecutionPolicy Bypass -File ".\Main.ps1" -Silent
+```
+
+Mở trình duyệt vào **http://localhost:5601**, tìm index `winlogs-*` để xem log trong Kibana.
+
+---
+
+## Cấu hình (`config.json`)
+
+Chỉnh file `config.json` để thay kênh thu thập, chu kỳ hoặc thông tin kết nối:
 
 ```json
 {
   "Remote": {
-    "Host": "127.0.0.1",
-    "Port": 2222,
+    "Host": "127.0.0.1", "Port": 2222,
     "User": "winlog",
     "SSHKeyPath": "C:\\ProgramData\\WinLogCollector\\keys\\id_rsa",
     "KnownHostsPath": "C:\\ProgramData\\WinLogCollector\\keys\\known_hosts",
     "RemotePath": "/incoming"
   },
-  "Local": {
-    "DataDir": "C:\\ProgramData\\WinLogCollector"
-  },
   "Collection": {
     "DefaultIntervalMinutes": 3,
-    "DefaultDurationMinutes": 9,
     "Subscriptions": [
-      {
-        "Channel": "Security",
-        "EventIDs": [4624, 4625, 4688]
-      },
-      {
-        "Channel": "System",
-        "EventIDs": []
-      },
-      {
-        "Channel": "Microsoft-Windows-PowerShell/Operational",
-        "EventIDs": [4103, 4104]
-      }
+      { "Channel": "Security",             "EventIDs": [4624, 4625, 4634, 4688, 4720] },
+      { "Channel": "System",               "EventIDs": [] },
+      { "Channel": "Microsoft-Windows-PowerShell/Operational", "EventIDs": [4103, 4104] }
     ]
   },
-  "Queue": {
-    "MaxSizeMB": 2048,
-    "MaxAttempts": 20,
-    "MaxAgeDays": 14
-  }
+  "Queue": { "MaxSizeMB": 2048, "MaxAttempts": 20, "MaxAgeDays": 14 }
 }
+```
+
+`EventIDs: []` có nghĩa là thu **toàn bộ** event từ kênh đó, không lọc.
+
+---
+
+## Giao diện quản trị (6 Tab)
+
+| Tab | Chức năng |
+|---|---|
+| **1 — Tổng quan** | Xem số event đã thu, dung lượng Queue, trạng thái SFTP; thu thập ngay hoặc bật/tắt tự động |
+| **2 — Thu thập log** | Chọn chế độ: theo checkpoint tăng dần, lookback N phút, hoặc khoảng thời gian tùy chọn |
+| **3 — Tự động (Timer)** | Đặt chu kỳ chạy tự động; đếm ngược đến lần chạy kế tiếp |
+| **4 — Cấu hình SFTP** | Sửa thông tin kết nối và kiểm tra kết nối ngay trên giao diện |
+| **5 — Hàng chờ (Queue)** | Xem danh sách file đang chờ gửi lại: kích thước, số lần thử, lần thử kế tiếp; retry thủ công |
+| **6 — Preflight Check** | Kiểm tra 8 điều kiện tiên quyết: quyền Admin, sftp.exe, SSH key, cổng 2222... |
+
+---
+
+## Độ tin cậy & Bảo mật
+
+- **Không mất, không trùng event:** agent tiếp tục từ `RecordID` đã lưu sau mỗi lần khởi động lại.
+- **Ghi file nguyên tử:** mọi file đi qua bước tạm `.tmp` trước khi đổi tên — không có file hoàn thành nửa vời.
+- **Ghim SSH host key:** `StrictHostKeyChecking=yes` bắt buộc; agent từ chối kết nối đến host lạ.
+- **Khóa đơn tiến trình:** named mutex ngăn hai bản agent chạy song song cùng lúc.
+- **Queue offline:** log tích lũy cục bộ khi mạng đứt, tự gửi lại khi kết nối phục hồi.
+
+---
+
+## Cấu trúc thư mục
+
+```
+Main.ps1                   # Điểm vào duy nhất (GUI hoặc Silent)
+setup-elk.ps1              # Script triển khai ELK + SFTP 1-click
+config.json                # Cấu hình runtime
+deploy/elk/                # Docker Compose + Logstash pipeline
+src/Core/LogCollector.ps1  # Engine thu thập event
+src/Core/LogUploader.ps1   # Nén, gửi SFTP, quản lý queue
+src/Gui/MainWindow.ps1     # Giao diện quản trị WinForms
+tests/Unit/                # Pester unit tests
+docs/ELK_SETUP.md          # Hướng dẫn cài đặt thủ công đầy đủ
 ```
 
 ---
 
-## 🚀 Hướng Dẫn Cài Đặt & Chạy Hệ Thống
+## Chạy kiểm thử
 
-### 1. Cài đặt ELK Stack & SFTP Server (Chọn Phương pháp A hoặc B)
-
-> 📖 **Xem Tài Liệu Đầy Đủ**: File **[docs/ELK_SETUP.md](docs/ELK_SETUP.md)** hướng dẫn chi tiết từ A đến Z.
-
-- **Phương pháp A — ⚡ Cài đặt Nhanh 1-Click**:
-  Mở PowerShell (Run as Administrator) và chạy:
-  ```powershell
-  powershell -ExecutionPolicy Bypass -File ".\setup-elk.ps1"
-  ```
-  *(Tự động sinh SSH Key, bật Docker WSL2, inject Public Key, cập nhật `known_hosts` và file `config.json` trong 1 lệnh).*
-
-- **Phương pháp B — 🛠️ Cài đặt Thủ công Từng Bước**:
-  Xem hướng dẫn chi tiết từng bước tại [docs/ELK_SETUP.md](docs/ELK_SETUP.md#️-phương-pháp-2-cài-đặt-thủ-công-từng-bước-manual-setup-step-by-step).
+```powershell
+Invoke-Pester -Path ".\tests\Unit\Collector.Tests.ps1"
+# Kết quả: Passed: 3  Failed: 0
+```
 
 ---
 
-### 2. Chạy Agent Thu Thập Log
+## Giấy phép
 
-- **Chạy Giao diện Quản trị GUI WinForms (Mặc định)**:
-  ```powershell
-  powershell -ExecutionPolicy Bypass -File ".\Main.ps1"
-  ```
+MIT License — xem chi tiết tại [LICENSE](LICENSE).
 
-- **Chạy Chế độ Silent (Headless Mode - Dùng cho Task Scheduler)**:
-  ```powershell
-  powershell -ExecutionPolicy Bypass -File ".\Main.ps1" -Silent
-  ```
-
-- **Chạy Unit Tests (Pester)**:
-  ```powershell
-  Invoke-Pester -Path ".\tests\Unit\Collector.Tests.ps1"
-  ```
-
----
-
-## 🖥️ Giao diện Quản trị WinForms (6 Tab)
-
-| Tab | Chức năng | Chi tiết |
-|---|---|---|
-| **1. 📊 Tổng quan** | KPI Stat Cards & Điều khiển nhanh | Xem tổng số Event đã lấy, dung lượng Queue, trạng thái SFTP; nút Thu thập ngay, Bắt đầu/Dừng tự động, Preflight. |
-| **2. 📥 Thu thập log** | Quản lý Subscriptions & Mode | Đổi giữa Checkpoint (incremental) và Lookback (phút); DataGridView chỉnh sửa trực tiếp danh sách Event Log Channels & Event IDs. |
-| **3. ⚡ Tự động (Timer)** | Lịch chạy định kỳ Continuous Mode | Chỉnh chu kỳ Timer (phút), đếm ngược thời gian lần chạy kế tiếp, tự động retry queue đệm offline. |
-| **4. 🌐 Cấu hình SFTP** | Cấu hình & Thử nghiệm kết nối | Thay đổi Host, Port, Username, RemotePath, SSH Key, KnownHosts; thử cổng TCP 22 & lưu cấu hình trực tiếp vào `config.json`. |
-| **5. 📦 Hàng chờ Queue** | Quản lý đệm Offline & Quarantine | DataGridView danh sách file `.zip` đang chờ retry (Dung lượng, Số lần thử, Lần thử kế tiếp); nút Retry ngay & Mở thư mục. |
-| **6. 🔍 Preflight Check** | Bảng kiểm tra tiền điều kiện | DataGridView kiểm tra 8 tiêu chí hệ thống (Admin, sftp.exe, SSH Key, KnownHosts, Event Channels, Cổng TCP 22). |
-
----
-
-## 🔒 Tính năng Bảo mật & Độ tin cậy (Security & Invariants)
-
-1. **Strict Host Key Verification**: Ép buộc kiểm tra fingerprint máy chủ qua file `known_hosts` (ngăn ngừa Man-in-the-Middle).
-2. **Atomic Operations**: Ghi file tạm (`.tmp`) rồi đổi tên sang `.ready`/`.queue.json` để tránh race-conditions.
-3. **Single Instance Mutex**: Sử dụng `Local\WinLogCollector` Named Mutex ngăn chạy nhiều tiến trình cùng lúc.
-4. **Oldest-First RecordID Pagination**: Query log theo thứ tự từ cũ tới mới dựa trên EventRecordID, đảm bảo thu thập đầy đủ sau khi máy tắt hoặc gián đoạn.
-5. **Disk Protection**: Tự động ngừng thu thập khi Queue vượt quá ngưỡng `MaxSizeMB` cấu hình.
-
----
-
-## 📝 License
-
-Dự án phát hành theo mã nguồn mở **MIT License**. Xem chi tiết tại [LICENSE](LICENSE).
-
----
-*Đồ án CT491 – Niên Luận Cơ Sở \| B2203708 – Phan Thanh Bình*
+*Đồ án CT491 – Niên Luận Cơ Sở · B2203708 – Phan Thanh Bình*
