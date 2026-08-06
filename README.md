@@ -110,7 +110,8 @@ Edit `config.json` to change channels, intervals, or connection settings:
     "DefaultIntervalMinutes": 3,
     "Subscriptions": [
       { "Channel": "Security",             "EventIDs": [4624, 4625, 4634, 4688, 4720] },
-      { "Channel": "System",               "EventIDs": [] },
+      { "Channel": "System",               "EventIDs": [6005, 6006, 6008, 7045] },
+      { "Channel": "Application",          "EventIDs": [] },
       { "Channel": "Microsoft-Windows-PowerShell/Operational", "EventIDs": [4103, 4104] }
     ]
   },
