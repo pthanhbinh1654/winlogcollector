@@ -36,24 +36,30 @@ Windows ghi lại hàng nghìn sự kiện mỗi ngày: đăng nhập, cài dị
 
 ## Cách hoạt động
 
-```
-Windows Event Log
-   │  (Security, System, PowerShell — lọc theo Event ID)
-   ▼
-LogCollector Engine  ──  đọc tăng dần từ RecordID đã lưu (checkpoint)
-   │
-   ▼
-.jsonl.ready  →  ZIP archive  →  SFTP (cổng 2222)
-                                      │
-                       ┌──────────────┘
-                       ▼
-              Container sftp01 (WSL2)
-                       │
-              Container extractor01  ──  tự động giải nén ZIP mới
-                       │
-              Logstash  →  Elasticsearch (index theo ngày: winlogs-YYYY.MM.dd)
-                                         │
-                                    Kibana :5601  (xem dashboard)
+```mermaid
+flowchart TD
+    subgraph Agent ["💻 Windows Agent (Máy nguồn)"]
+        A["📋 Windows Event Log\n(Security, System, PowerShell)"] -->|Truy vấn Tăng dần| B["⚡ LogCollector Engine\n(Checkpoint RecordID)"]
+        B -->|Ghi JSONL & Nén| C["📦 Archive ZIP"]
+        C -->|Gửi SFTP Cổng 2222| D["🔒 OpenSSH SFTP Client"]
+        C -.->|Lỗi Truyền Tải| Q["⏳ Hàng Chờ Offline & Retry\n(Exponential Backoff)"]
+        Q -.->|Thử > 20 lần / Quá 14 ngày| X["☣️ Thư Mục Quarantine"]
+        Q -->|Thử Gửi Lại| D
+    end
+
+    subgraph Server ["🐳 ELK Pipeline (WSL2 Docker)"]
+        D -->|Nhận File| E["📥 SFTP Container (sftp01)"]
+        E -->|Shared Volume| F["⚙️ Sidecar Extractor (extractor01)"]
+        F -->|Tự Động Giải Nén| G["🔀 Logstash Pipeline"]
+        G -->|Parse & Index| H["🔍 Elasticsearch (winlogs-*)"]
+        H -->|Trực Quan Hóa| I["📊 Kibana Dashboard (:5601)"]
+    end
+
+    style Agent fill:#0f172a,stroke:#3b82f6,color:#fff
+    style Server fill:#1e1b4b,stroke:#8b5cf6,color:#fff
+    style Q fill:#7c2d12,stroke:#f97316,color:#fff
+    style X fill:#450a0a,stroke:#ef4444,color:#fff
+    style I fill:#064e3b,stroke:#10b981,color:#fff
 ```
 
 Nếu gửi thất bại, file được đưa vào hàng chờ (Queue) cục bộ, tự retry theo lịch backoff. File thất bại 20 lần hoặc quá 14 ngày sẽ tự chuyển sang Quarantine.

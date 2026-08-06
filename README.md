@@ -36,24 +36,30 @@ Windows records thousands of security and system events every day — logins, se
 
 ## How It Works
 
-```
-Windows Event Log
-   │  (Security, System, PowerShell — filtered by Event ID)
-   ▼
-LogCollector Engine  ──  reads incrementally from last RecordID checkpoint
-   │
-   ▼
-.jsonl.ready  →  ZIP archive  →  SFTP (port 2222)
-                                      │
-                       ┌──────────────┘
-                       ▼
-              sftp01 container (WSL2)
-                       │
-              extractor01 sidecar  ──  watches for ZIPs, unzips automatically
-                       │
-              Logstash  →  Elasticsearch (daily index: winlogs-YYYY.MM.dd)
-                                         │
-                                    Kibana :5601
+```mermaid
+flowchart TD
+    subgraph Agent ["💻 Windows Agent (Host OS)"]
+        A["📋 Windows Event Log\n(Security, System, PowerShell)"] -->|Incremental Query| B["⚡ LogCollector Engine\n(RecordID Checkpoint)"]
+        B -->|Write JSONL & Compress| C["📦 ZIP Archive"]
+        C -->|SFTP Port 2222| D["🔒 OpenSSH SFTP Client"]
+        C -.->|Upload Failure| Q["⏳ Local Queue & Retry\n(Exponential Backoff)"]
+        Q -.->|Exceed 20 Attempts / 14 Days| X["☣️ Quarantine Folder"]
+        Q -->|Retry Transfer| D
+    end
+
+    subgraph Server ["🐳 ELK Pipeline (WSL2 Docker)"]
+        D -->|Transfer File| E["📥 SFTP Container (sftp01)"]
+        E -->|Shared Volume| F["⚙️ Sidecar Extractor (extractor01)"]
+        F -->|Auto Unzip JSONL| G["🔀 Logstash Pipeline"]
+        G -->|Parse & Index| H["🔍 Elasticsearch (winlogs-*)"]
+        H -->|Visualize & Search| I["📊 Kibana Dashboard (:5601)"]
+    end
+
+    style Agent fill:#0f172a,stroke:#3b82f6,color:#fff
+    style Server fill:#1e1b4b,stroke:#8b5cf6,color:#fff
+    style Q fill:#7c2d12,stroke:#f97316,color:#fff
+    style X fill:#450a0a,stroke:#ef4444,color:#fff
+    style I fill:#064e3b,stroke:#10b981,color:#fff
 ```
 
 If a transfer fails, the file moves to a local Queue with automatic retry + exponential backoff. Files that fail 20 times or are older than 14 days are moved to Quarantine automatically.
